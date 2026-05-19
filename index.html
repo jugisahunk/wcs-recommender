@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WCS Song Recommender</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────── -->
+<header>
+  <div class="header-left">
+    <h1>WCS Song Recommender</h1>
+    <p>West Coast Swing · YouTube Music</p>
+  </div>
+  <div class="header-right">
+    <div class="oauth-area" id="oauth-area">
+      <span class="oauth-status" id="oauth-status"></span>
+      <input id="oauth-client-input" type="password" placeholder="Google OAuth Client ID (for playlists)" autocomplete="off">
+      <button class="btn-save-key" id="btn-save-oauth">Save</button>
+    </div>
+  </div>
+</header>
+
+<!-- ── Tabs ─────────────────────────────────────────────────────────────── -->
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="curated">Curated Songs</button>
+  <button class="tab-btn" data-tab="approved">
+    Approved
+    <span class="tab-count" id="approved-count"></span>
+  </button>
+  <button class="tab-btn" data-tab="search">Search YouTube Music</button>
+</nav>
+
+<!-- ── Filters (curated tab) ────────────────────────────────────────────── -->
+<div class="filters" id="filters-row">
+  <div class="filter-group">
+    <label>Genre</label>
+    <select id="filter-genre"></select>
+  </div>
+
+  <div class="filter-group">
+    <label>BPM &nbsp;<span id="bpm-range-label">85 – 120</span></label>
+    <div class="bpm-dual-range" id="bpm-dual-range">
+      <div class="bpm-track-bg"></div>
+      <div class="bpm-track-fill" id="bpm-track-fill"></div>
+      <input type="range" id="bpm-min" min="60" max="180" value="85" step="5">
+      <input type="range" id="bpm-max" min="60" max="180" value="120" step="5">
+    </div>
+  </div>
+
+  <div class="filter-group">
+    <label>Energy</label>
+    <div class="energy-pills">
+      <button class="pill" data-energy="low">🔵 Low</button>
+      <button class="pill" data-energy="medium">🟡 Medium</button>
+      <button class="pill" data-energy="high">🔴 High</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Approved actions bar ──────────────────────────────────────────────── -->
+<div class="approved-bar" id="approved-bar" style="display:none">
+  <label class="select-all-label">
+    <input type="checkbox" id="select-all-cb"> Select all
+  </label>
+  <button class="btn-create-playlist" id="btn-create-playlist" disabled>
+    ▶ Create YouTube Playlist
+  </button>
+</div>
+
+<!-- ── Search bar (search tab) ──────────────────────────────────────────── -->
+<div class="search-bar" id="search-bar-row" style="display:none">
+  <input id="search-input" type="text"
+    placeholder='Search artist, song, or mood — opens in YouTube Music'>
+  <button class="btn-search" id="btn-search">Open in YTM ↗</button>
+</div>
+
+<!-- ── Main content ──────────────────────────────────────────────────────── -->
+<main>
+  <div id="tab-curated"></div>
+  <div id="tab-approved" style="display:none"></div>
+  <div id="tab-search"   style="display:none"></div>
+</main>
+
+<!-- ── Playlist success toast ────────────────────────────────────────────── -->
+<div class="playlist-toast" id="playlist-toast" style="display:none">
+  <span id="playlist-toast-msg"></span>
+  <a id="playlist-toast-link" href="#" target="_blank" rel="noopener">Open playlist ↗</a>
+  <button onclick="document.getElementById('playlist-toast').style.display='none'">✕</button>
+</div>
+
+<!-- ── Player bar ────────────────────────────────────────────────────────── -->
+<div id="player-bar">
+  <div id="yt-player"></div>
+  <div class="player-info">
+    <div class="p-title">—</div>
+    <div class="p-artist"></div>
+    <div class="p-bpm"></div>
+  </div>
+  <div class="player-actions">
+    <a id="player-ytm-btn" class="btn-player-ytm" href="#" target="_blank" rel="noopener">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 0C5.376 0 0 5.376 0 12s5.376 12 12 12 12-5.376 12-12S18.624 0 12 0zm0 19.104c-3.924 0-7.104-3.18-7.104-7.104S8.076 4.896 12 4.896s7.104 3.18 7.104 7.104-3.18 7.104-7.104 7.104zm0-13.332c-3.432 0-6.228 2.796-6.228 6.228S8.568 18.228 12 18.228s6.228-2.796 6.228-6.228S15.432 5.772 12 5.772zM9.684 15.54V8.46L16.2 12l-6.516 3.54z"/>
+      </svg>
+      Open in YouTube Music
+    </a>
+    <button class="btn-close-player" id="btn-close-player" title="Close player">✕</button>
+  </div>
+</div>
+
+<!-- ── Scripts ───────────────────────────────────────────────────────────── -->
+<script src="https://accounts.google.com/gsi/client" async></script>
+<script src="https://www.youtube.com/iframe_api"></script>
+<script src="songs.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>
