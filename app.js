@@ -174,9 +174,7 @@ function createSongCard(song, opts = {}) {
       <button class="btn-approve ${approved ? "active" : ""}" title="Approve this song">
         ✓ Approve
       </button>
-      <button class="btn-disapprove" title="Hide from recommendations">
-        ✕ Disapprove
-      </button>
+      ${!opts.approveOnly ? `<button class="btn-disapprove" title="Hide from recommendations">✕ Disapprove</button>` : ""}
     </div>` : `
     <div class="song-vote">
       <button class="btn-disapprove" title="Remove from approved list">
@@ -198,20 +196,23 @@ function createSongCard(song, opts = {}) {
     card.querySelector(".btn-approve").addEventListener("click", (e) => {
       e.stopPropagation();
       if (isApproved(song)) {
-        // unapprove
         approvedSongs = approvedSongs.filter(s => s.videoId !== song.videoId);
         state.selectedForPlaylist.delete(song.videoId);
         persist();
         updateApprovedCount();
-        renderCuratedTab();
+        if (!opts.approveOnly) renderCuratedTab();
+        card.querySelector(".btn-approve").classList.remove("active");
       } else {
         approveSong(song);
+        card.querySelector(".btn-approve").classList.add("active");
       }
     });
-    card.querySelector(".btn-disapprove").addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (confirm(`Hide "${song.title}" from recommendations?`)) disapproveSong(song);
-    });
+    if (!opts.approveOnly) {
+      card.querySelector(".btn-disapprove").addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (confirm(`Hide "${song.title}" from recommendations?`)) disapproveSong(song);
+      });
+    }
   } else {
     // Approved tab — remove button
     card.querySelector(".btn-disapprove").addEventListener("click", (e) => {
@@ -362,18 +363,73 @@ function updateCreateBtn() {
 }
 
 // ── Search tab ─────────────────────────────────────────────────────────────
+function extractVideoId(url) {
+  const patterns = [
+    /[?&]v=([A-Za-z0-9_-]{11})/,
+    /youtu\.be\/([A-Za-z0-9_-]{11})/,
+    /^([A-Za-z0-9_-]{11})$/,
+  ];
+  for (const p of patterns) {
+    const m = url.match(p);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 function renderSearchTab() {
   document.getElementById("tab-search").innerHTML = `
     <div class="state-message">
       <div class="icon">🎵</div>
-      <p>Type a song, artist, or mood above.<br>Results open directly in YouTube Music.</p>
+      <p>Paste a YouTube or YouTube Music URL above to add a song.</p>
     </div>`;
 }
 
-function doSearch() {
-  const q = document.getElementById("search-input").value.trim();
-  if (!q) return;
-  window.open(`https://music.youtube.com/search?q=${encodeURIComponent("west coast swing " + q)}`, "_blank");
+async function doSearch() {
+  const raw = document.getElementById("search-input").value.trim();
+  if (!raw) return;
+
+  const videoId = extractVideoId(raw);
+  if (!videoId) {
+    document.getElementById("tab-search").innerHTML =
+      `<div class="state-message"><p class="error-msg">⚠ Couldn't find a YouTube video ID in that URL.</p></div>`;
+    return;
+  }
+
+  const container = document.getElementById("tab-search");
+  container.innerHTML = `<div class="state-message"><div class="icon">🎵</div><p>Loading…</p></div>`;
+
+  try {
+    const res = await fetch(
+      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
+    );
+    if (!res.ok) throw new Error("not found");
+    const data = await res.json();
+    const song = { title: data.title, artist: data.author_name, videoId };
+    renderSearchResults([song], null);
+  } catch (_) {
+    container.innerHTML =
+      `<div class="state-message"><p class="error-msg">⚠ Couldn't load that video. Check the URL and try again.</p></div>`;
+  }
+}
+
+function renderSearchResults(songs, query) {
+  const container = document.getElementById("tab-search");
+  container.innerHTML = "";
+
+  const header = document.createElement("div");
+  header.className = "section-header";
+  header.innerHTML = `<h2>${query ? `Results for &ldquo;${escHtml(query)}&rdquo;` : "Added Song"}</h2><span class="count-badge">${songs.length}</span>`;
+  container.appendChild(header);
+
+  if (songs.length === 0) {
+    container.insertAdjacentHTML("beforeend", `<div class="state-message"><p>No results found.</p></div>`);
+    return;
+  }
+
+  const grid = document.createElement("div");
+  grid.className = "song-grid";
+  songs.forEach(s => grid.appendChild(createSongCard(s, { showApproveButtons: true, approveOnly: true })));
+  container.appendChild(grid);
 }
 
 // ── Tab switching ──────────────────────────────────────────────────────────
