@@ -494,31 +494,8 @@ main { padding: 20px 24px; }
 }
 .search-setup .setup-icon { font-size: 2.5rem; margin-bottom: 16px; }
 .search-setup p { font-size: 0.88rem; line-height: 1.7; margin-bottom: 14px; }
-.setup-key-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-.setup-key-row input {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  font-size: 0.85rem;
-  background: var(--surface);
-  color: var(--text);
-}
-.setup-key-row input:focus { outline: 2px solid var(--accent); border-color: transparent; }
 .setup-hint { font-size: 0.76rem !important; color: var(--text-muted); }
-.btn-clear-key {
-  margin-top: 8px;
-  background: none;
-  border: none;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  cursor: pointer;
-  text-decoration: underline;
-}
+.signed-in-note { color: var(--green); font-size: 0.82rem; }
 
 .spinner {
   width: 28px;

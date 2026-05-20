@@ -2,7 +2,6 @@
 let approvedSongs  = JSON.parse(localStorage.getItem("wcs_approved")     || "[]");
 let disapprovedIds = new Set(JSON.parse(localStorage.getItem("wcs_disapproved") || "[]"));
 let oauthClientId  = localStorage.getItem("wcs_oauth_client_id") || "";
-let ytApiKey       = localStorage.getItem("wcs_yt_api_key") || "";
 let oauthToken     = null;
 
 function persist() {
@@ -372,43 +371,35 @@ function updateCreateBtn() {
 // ── Search tab ─────────────────────────────────────────────────────────────
 function renderSearchTab() {
   const container = document.getElementById("tab-search");
-  container.innerHTML = "";
-
-  if (!ytApiKey) {
+  if (!oauthClientId) {
     container.innerHTML = `
       <div class="search-setup">
         <div class="setup-icon">🔑</div>
-        <p>Enter your <strong>YouTube Data API v3</strong> key to enable search.</p>
-        <div class="setup-key-row">
-          <input type="password" id="yt-api-key-input" placeholder="Paste API key here" autocomplete="off">
-          <button class="btn-save-key" id="btn-save-yt-key">Save</button>
-        </div>
-        <p class="setup-hint">Key is saved locally in your browser and only sent to YouTube's API.</p>
+        <p>Enter your <strong>Google OAuth Client ID</strong> in the header to enable search and playlist creation.</p>
+        <p class="setup-hint">Uses your signed-in YouTube account — no separate API key needed.</p>
       </div>`;
-    const input = document.getElementById("yt-api-key-input");
-    document.getElementById("btn-save-yt-key").addEventListener("click", () => {
-      const val = input.value.trim();
-      if (!val) return;
-      ytApiKey = val;
-      localStorage.setItem("wcs_yt_api_key", val);
-      renderSearchTab();
-    });
-    input.addEventListener("keydown", e => {
-      if (e.key === "Enter") document.getElementById("btn-save-yt-key").click();
-    });
     return;
   }
-
   container.innerHTML = `
     <div class="state-message">
       <div class="icon">🔍</div>
-      <p>Search for an artist, song, or style above.</p>
-      <button class="btn-clear-key" id="btn-clear-yt-key">Change API key</button>
+      <p>Search for an artist, song, or style above.<br>
+      ${oauthToken ? '<span class="signed-in-note">✓ Signed in to YouTube</span>' : 'You\'ll be prompted to sign in on first search.'}</p>
     </div>`;
-  document.getElementById("btn-clear-yt-key").addEventListener("click", () => {
-    ytApiKey = "";
-    localStorage.removeItem("wcs_yt_api_key");
-    renderSearchTab();
+}
+
+async function getOAuthToken() {
+  if (oauthToken) return oauthToken;
+  return new Promise((resolve, reject) => {
+    google.accounts.oauth2.initTokenClient({
+      client_id: oauthClientId,
+      scope: "https://www.googleapis.com/auth/youtube",
+      callback: (resp) => {
+        if (resp.error) { reject(new Error(resp.error)); return; }
+        oauthToken = resp.access_token;
+        resolve(oauthToken);
+      },
+    }).requestAccessToken();
   });
 }
 
@@ -416,16 +407,20 @@ async function doSearch() {
   const q = document.getElementById("search-input").value.trim();
   if (!q) return;
 
-  if (!ytApiKey) { renderSearchTab(); return; }
+  if (!oauthClientId) { renderSearchTab(); return; }
 
   const container = document.getElementById("tab-search");
   container.innerHTML = `<div class="state-message"><div class="icon">🔍</div><p>Searching…</p></div>`;
 
   try {
-    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(q)}&type=video&videoCategoryId=10&maxResults=6&key=${encodeURIComponent(ytApiKey)}`;
-    const res = await fetch(url);
+    const token = await getOAuthToken();
+    const res = await fetch(
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(q)}&type=video&videoCategoryId=10&maxResults=6`,
+      { headers: { "Authorization": `Bearer ${token}` } }
+    );
     const data = await res.json();
     if (data.error) {
+      if (data.error.code === 401) { oauthToken = null; }
       container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(data.error.message)}</p></div>`;
       return;
     }
@@ -435,8 +430,9 @@ async function doSearch() {
       videoId: item.id.videoId,
     }));
     renderSearchResults(songs, q);
-  } catch (_) {
-    container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ Search failed. Check your network and try again.</p></div>`;
+  } catch (e) {
+    oauthToken = null;
+    container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(e.message) || "Search failed. Try again."}</p></div>`;
   }
 }
 
@@ -494,18 +490,7 @@ async function createPlaylist() {
   btn.textContent = "Connecting…";
 
   try {
-    await new Promise((resolve, reject) => {
-      const client = google.accounts.oauth2.initTokenClient({
-        client_id: oauthClientId,
-        scope: "https://www.googleapis.com/auth/youtube",
-        callback: (resp) => {
-          if (resp.error) { reject(new Error(resp.error)); return; }
-          oauthToken = resp.access_token;
-          resolve();
-        },
-      });
-      client.requestAccessToken();
-    });
+    await getOAuthToken();
   } catch (err) {
     alert("Google sign-in failed: " + err.message);
     updateCreateBtn();
