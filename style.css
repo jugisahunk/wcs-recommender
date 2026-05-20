@@ -311,7 +311,10 @@ main { padding: 20px 24px; }
   cursor: default;
   transition: all 0.18s;
   box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
 }
+.song-card .song-actions { margin-top: auto; }
 .song-card:hover {
   border-color: var(--accent-light);
   box-shadow: 0 4px 16px var(--accent-glow), var(--shadow);
@@ -514,6 +517,28 @@ main { padding: 20px 24px; }
 .setup-hint a:hover { text-decoration: underline; }
 .setup-hint code { font-size: 0.75rem; background: var(--surface2); padding: 1px 5px; border-radius: 4px; }
 .signed-in-note { color: var(--green); font-size: 0.82rem; }
+
+.btn-google-signin {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 8px;
+  font-family: "Roboto", -apple-system, sans-serif;
+  font-size: 0.92rem;
+  font-weight: 500;
+  color: #3c4043;
+  cursor: pointer;
+  margin-top: 8px;
+  transition: box-shadow 0.15s, background 0.15s;
+}
+.btn-google-signin:hover {
+  background: #f8f9fa;
+  box-shadow: 0 1px 3px rgba(60,64,67,0.15), 0 4px 8px rgba(60,64,67,0.1);
+}
+.btn-google-signin:active { background: #f1f3f4; }
 
 .spinner {
   width: 28px;

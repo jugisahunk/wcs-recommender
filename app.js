@@ -1,8 +1,51 @@
+// ── External API config ────────────────────────────────────────────────────
+const LASTFM_API_KEY = "894d3461c4f24e31be6b9b23b57b16e6";
+const LASTFM_BASE    = "https://ws.audioscrobbler.com/2.0/";
+const DEEZER_BASE    = "https://api.deezer.com";
+
+// Map our internal genre IDs → Last.fm tag names.
+const LASTFM_TAG_MAP = {
+  motown:       "motown",
+  rnb:          "rnb",
+  "neo-soul":   "neo-soul",
+  blues:        "blues",
+  funk:         "funk",
+  jazz:         "jazz",
+  contemporary: "singer-songwriter",
+  pop:          "pop",
+  country:      "country",
+  indie:        "indie",
+};
+
+// For the "All Genres" option we pull a mix of WCS-friendly tags.
+const ALL_GENRES_TAGS = ["motown", "soul", "blues", "funk", "neo-soul", "rnb"];
+
 // ── Persistence ────────────────────────────────────────────────────────────
 let approvedSongs  = JSON.parse(localStorage.getItem("wcs_approved")     || "[]");
 let disapprovedIds = new Set(JSON.parse(localStorage.getItem("wcs_disapproved") || "[]"));
-let oauthClientId  = localStorage.getItem("wcs_oauth_client_id") || "";
-let oauthToken     = null;
+
+// Decode HTML entities returned by YouTube API (e.g. &#39; &amp;)
+function decodeHtml(str) {
+  if (!str) return str;
+  const el = document.createElement("textarea");
+  el.innerHTML = str;
+  return el.value;
+}
+
+// Look up a known BPM for a videoId from our curated reference list.
+// Returns null if the song isn't a known WCS curated track.
+const CURATED_BPM_BY_ID = Object.freeze(
+  Object.fromEntries((typeof CURATED_SONGS !== "undefined" ? CURATED_SONGS : []).map(s => [s.videoId, s.bpm]))
+);
+function getSongBpm(song) {
+  return song.bpm ?? CURATED_BPM_BY_ID[song.videoId] ?? null;
+}
+const YOUTUBE_OAUTH_CLIENT_ID = "869950477741-r543qe74sk7e1gj7m1f80iv991unbf9g.apps.googleusercontent.com";
+let oauthToken = null;
+let oauthClient = null;
+// Cleanup legacy localStorage key from earlier versions
+localStorage.removeItem("wcs_oauth_client_id");
+localStorage.removeItem("wcs_yt_api_key");
 
 function persist() {
   localStorage.setItem("wcs_approved",    JSON.stringify(approvedSongs));
@@ -143,7 +186,8 @@ function createSongCard(song, opts = {}) {
     (opts.selectable ? " selectable" : "");
   card.dataset.videoId = song.videoId;
 
-  const bpmHtml    = song.bpm    ? `<span class="bpm-tag">${song.bpm} BPM</span>` : "";
+  const effectiveBpm = getSongBpm(song);
+  const bpmHtml    = effectiveBpm ? `<span class="bpm-tag">${effectiveBpm} BPM</span>` : "";
   const genreHtml  = song.genre  ? `<span class="genre-tag">${GENRE_LABELS[song.genre] || song.genre}</span>` : "";
   const energyHtml = song.energy ? `<span class="energy-dot ${song.energy}"></span>` : "";
   const approvedBadge = (approved && !opts.selectable) ? `<span class="approved-badge">✓ Approved</span>` : "";
@@ -255,54 +299,191 @@ function createSongCard(song, opts = {}) {
 
 // ── Curated tab ────────────────────────────────────────────────────────────
 // ── Curated tab — YTM search-driven ────────────────────────────────────────
-function buildCurationQuery() {
-  const energyTerms = { low: "slow mellow", medium: "", high: "upbeat energetic" };
-  const parts = ["west coast swing"];
+// Title patterns that almost never represent real dance songs.
+const NON_SONG_PATTERNS = [
+  /backing\s*track/i,
+  /karaoke/i,
+  /jam\s*track/i,
+  /jam\s*for/i,
+  /no\s*(vocals?|bass|drums|guitar)/i,
+  /\blesson\b/i,
+  /tutorial/i,
+  /instructional/i,
+  /how\s+to/i,
+  /reaction/i,
+  /\bmix\s*(set|tape)\b/i,
+  /\b(1|one)\s*hour\b/i,
+  /\bnightcore\b/i,
+  /\bsped\s*up\b/i,
+  /\bslowed\b/i,
+  /【[^】]*】/,                      // CJK brackets — common backing-track signal
+  /\b(G|A|B|C|D|E|F)#?\s+(major|minor)\b.*\d+\s*bpm/i, // "G major 127bpm" pattern
+];
 
-  if (state.genre !== "all") {
-    const label = GENRES.find(g => g.id === state.genre)?.label || state.genre;
-    parts.push(label.replace(" / ", " "));
-  }
-
-  if (state.energy !== "all") parts.push(energyTerms[state.energy] || "");
-
-  const bpmMid = Math.round((state.bpmMin + state.bpmMax) / 2);
-  parts.push(`${bpmMid} bpm dance song`);
-
-  return parts.filter(Boolean).join(" ");
+function isLikelyDanceSong(item) {
+  const title = item.snippet?.title || "";
+  return !NON_SONG_PATTERNS.some(p => p.test(title));
 }
 
 function markFiltersPending() {
   document.querySelector(".btn-refresh")?.classList.add("pending");
 }
 
-async function fetchRecommendations(token) {
-  document.querySelector(".btn-refresh")?.classList.remove("pending");
-  const container = document.getElementById("tab-curated");
-  container.innerHTML = `<div class="state-message"><div class="icon">🔍</div><p>Finding songs…</p></div>`;
+// Step 1 — Pull top tracks by genre tag from Last.fm.
+async function fetchLastFmTopTracks(tag, limit = 30) {
+  const url = `${LASTFM_BASE}?method=tag.gettoptracks&tag=${encodeURIComponent(tag)}&api_key=${LASTFM_API_KEY}&format=json&limit=${limit}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (data?.error) throw new Error(`Last.fm: ${data.message || "request failed"}`);
+  return (data?.tracks?.track || []).map(t => ({
+    artist: t.artist?.name || "",
+    title: t.name || "",
+  })).filter(t => t.artist && t.title);
+}
+
+async function fetchCandidates(genre) {
+  if (genre === "all") {
+    // Combine top tracks from a mix of WCS-friendly tags.
+    const lists = await Promise.all(ALL_GENRES_TAGS.map(t =>
+      fetchLastFmTopTracks(t, 10).catch(() => [])
+    ));
+    // Dedupe by artist+title
+    const seen = new Set();
+    const merged = [];
+    for (const list of lists) {
+      for (const t of list) {
+        const key = `${t.artist}|${t.title}`.toLowerCase();
+        if (!seen.has(key)) { seen.add(key); merged.push(t); }
+      }
+    }
+    return merged.sort(() => Math.random() - 0.5);
+  }
+  const tag = LASTFM_TAG_MAP[genre] || genre;
+  return fetchLastFmTopTracks(tag, 30);
+}
+
+// Deezer's API doesn't set CORS headers but does support JSONP via
+// `output=jsonp&callback=...`. We inject a <script> tag and wait for the
+// callback. Each call gets a unique callback name to avoid collisions.
+let _jsonpCounter = 0;
+function jsonp(url) {
+  return new Promise((resolve, reject) => {
+    const cb = `_wcs_jsonp_${Date.now()}_${++_jsonpCounter}`;
+    const script = document.createElement("script");
+    const cleanup = () => { delete window[cb]; script.remove(); };
+    const timer = setTimeout(() => { cleanup(); reject(new Error("JSONP timeout")); }, 8000);
+    window[cb] = (data) => { clearTimeout(timer); cleanup(); resolve(data); };
+    script.onerror = () => { clearTimeout(timer); cleanup(); reject(new Error("JSONP load error")); };
+    const sep = url.includes("?") ? "&" : "?";
+    script.src = `${url}${sep}output=jsonp&callback=${cb}`;
+    document.head.appendChild(script);
+  });
+}
+
+// BPM detection algorithms often report double or half time. WCS dance
+// tempos sit in 60–140 BPM, so squeeze extremes into that band.
+function normalizeBpm(bpm) {
+  if (!bpm || bpm <= 0) return null;
+  let n = Math.round(bpm);
+  if (n > 160) n = Math.round(n / 2);   // double-time → halve
+  if (n < 50)  n = Math.round(n * 2);   // half-time → double
+  return n;
+}
+
+// Step 2 — Look up BPM via Deezer's free public API. Returns null if not found.
+async function lookupDeezerBpm(artist, title) {
   try {
-    const query = buildCurationQuery();
-    const res = await fetch(
-      `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoCategoryId=10&maxResults=12`,
-      { headers: { "Authorization": `Bearer ${token}` } }
-    );
+    const q = `artist:"${artist}" track:"${title}"`;
+    const search = await jsonp(`${DEEZER_BASE}/search?q=${encodeURIComponent(q)}&limit=1`);
+    const trackId = search?.data?.[0]?.id;
+    if (!trackId) return null;
+    const detail = await jsonp(`${DEEZER_BASE}/track/${trackId}`);
+    return normalizeBpm(detail?.bpm);
+  } catch (_) {
+    return null;
+  }
+}
+
+// Step 3 — Find the YouTube video that matches a known track. Returns videoId or null.
+async function findYouTubeVideo(artist, title, token) {
+  try {
+    const q = `${artist} ${title}`;
+    const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(q)}&type=video&videoCategoryId=10&maxResults=1`;
+    const res = await fetch(url, { headers: { "Authorization": `Bearer ${token}` } });
     const data = await res.json();
     if (data.error) {
       if (data.error.code === 401) oauthToken = null;
-      container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(data.error.message)}</p></div>`;
+      throw new Error(data.error.message);
+    }
+    const item = (data.items || []).find(it => isLikelyDanceSong(it));
+    if (!item?.id?.videoId) return null;
+    return item.id.videoId;
+  } catch (_) {
+    return null;
+  }
+}
+
+const MAX_YT_LOOKUPS = 15;        // cap YouTube searches per refresh (quota)
+const TARGET_DISPLAY  = 12;       // cards to show
+
+async function fetchRecommendations(token) {
+  document.querySelector(".btn-refresh")?.classList.remove("pending");
+  const container = document.getElementById("tab-curated");
+  const setStatus = (msg) => {
+    container.innerHTML = `<div class="state-message"><div class="icon">🔍</div><p>${escHtml(msg)}</p></div>`;
+  };
+
+  try {
+    setStatus(state.genre === "all"
+      ? "Finding popular WCS-friendly tracks…"
+      : `Finding popular ${state.genre} tracks…`);
+    const candidates = await fetchCandidates(state.genre);
+    if (candidates.length === 0) {
+      container.innerHTML = `<div class="state-message"><p>No tracks found for this genre.</p></div>`;
       return;
     }
-    state.recommendedSongs = (data.items || [])
-      .map(item => ({
-        title: item.snippet.title,
-        artist: item.snippet.channelTitle,
-        videoId: item.id.videoId,
-      }))
-      .filter(s => !isDisapproved(s) && !isApproved(s));
+
+    setStatus(`Checking BPM data for ${candidates.length} tracks…`);
+    const withBpm = await Promise.all(candidates.map(async c => ({
+      ...c,
+      bpm: await lookupDeezerBpm(c.artist, c.title),
+    })));
+
+    // Filter by BPM range. Tracks with unknown BPM pass through (better to
+    // show too many than too few — user can disapprove duds).
+    const inRange = withBpm.filter(c =>
+      c.bpm === null || (c.bpm >= state.bpmMin && c.bpm <= state.bpmMax)
+    );
+
+    // Skip ones the user already approved or disapproved.
+    const fresh = inRange.filter(c => {
+      const candidateKey = `${c.artist}|${c.title}`.toLowerCase();
+      if (approvedSongs.some(s => `${s.artist}|${s.title}`.toLowerCase() === candidateKey)) return false;
+      // We can't know videoId yet for disapproved; will re-check after YT lookup
+      return true;
+    });
+
+    const toLookup = fresh.slice(0, MAX_YT_LOOKUPS);
+    if (toLookup.length === 0) {
+      container.innerHTML = `<div class="state-message"><p>No tracks matched your BPM range. Try widening it and refresh.</p></div>`;
+      return;
+    }
+
+    setStatus(`Looking up ${toLookup.length} on YouTube…`);
+    const ytResults = await Promise.all(toLookup.map(async c => {
+      const videoId = await findYouTubeVideo(c.artist, c.title, token);
+      if (!videoId) return null;
+      return { title: c.title, artist: c.artist, videoId, bpm: c.bpm };
+    }));
+
+    state.recommendedSongs = ytResults
+      .filter(Boolean)
+      .filter(s => !isDisapproved(s) && !isApproved(s))
+      .slice(0, TARGET_DISPLAY);
+
     renderCuratedTab();
   } catch (e) {
-    oauthToken = null;
-    container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(e.message) || "Failed to load recommendations."}</p></div>`;
+    container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(e.message || "Failed to load recommendations.")}</p></div>`;
   }
 }
 
@@ -322,40 +503,28 @@ function renderCuratedTab() {
   const container = document.getElementById("tab-curated");
   container.innerHTML = "";
 
-  if (!oauthClientId) {
+  if (!oauthToken) {
     container.innerHTML = `
       <div class="search-setup">
         <div class="setup-icon">🎵</div>
-        <p>Connect your <strong>YouTube account</strong> to get song recommendations.</p>
-        <div class="setup-key-row">
-          <input type="text" id="inline-oauth-input" placeholder="Google OAuth Client ID" autocomplete="off">
-          <button class="btn-save-key" id="inline-oauth-save">Connect</button>
-        </div>
-        <p class="setup-hint">
-          Need a Client ID?
-          <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>
-          → APIs &amp; Services → Credentials → Create OAuth 2.0 Client ID (Web application).
-          Add <code>${location.origin}</code> to Authorized JavaScript origins.
-        </p>
+        <p>Sign in with your Google account to get YouTube song recommendations.</p>
+        <button class="btn-google-signin" id="btn-google-signin">
+          <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+            <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+            <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
+            <path d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z" fill="#FBBC05"/>
+            <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.167 6.656 3.58 9 3.58z" fill="#EA4335"/>
+          </svg>
+          Sign in with Google
+        </button>
       </div>`;
-    const input = container.querySelector("#inline-oauth-input");
-    container.querySelector("#inline-oauth-save").addEventListener("click", () => {
-      const val = input.value.trim();
-      if (!val) return;
-      oauthClientId = val;
-      localStorage.setItem("wcs_oauth_client_id", val);
-      document.getElementById("oauth-client-input").value = val.slice(0, 12) + "…";
-      updateOAuthStatus();
-      // triggerOAuth must be called synchronously inside this click handler
+    document.getElementById("btn-google-signin").addEventListener("click", () => {
       triggerOAuth(
-        (token) => fetchRecommendations(token),
+        () => fetchRecommendations(oauthToken),
         (err) => {
-          container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ Sign-in failed: ${escHtml(String(err))}.<br>Make sure <code>${location.origin}</code> is in your OAuth Client's Authorized JavaScript origins.</p></div>`;
+          container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ Sign-in failed: ${escHtml(String(err))}</p><p>Make sure <code>${location.origin}</code> is in this OAuth client's Authorized JavaScript origins, and that your Google account is in the app's test users list.</p></div>`;
         }
       );
-    });
-    input.addEventListener("keydown", e => {
-      if (e.key === "Enter") container.querySelector("#inline-oauth-save").click();
     });
     return;
   }
@@ -447,15 +616,6 @@ function updateCreateBtn() {
 // ── Search tab ─────────────────────────────────────────────────────────────
 function renderSearchTab() {
   const container = document.getElementById("tab-search");
-  if (!oauthClientId) {
-    container.innerHTML = `
-      <div class="search-setup">
-        <div class="setup-icon">🔑</div>
-        <p>Enter your <strong>Google OAuth Client ID</strong> in the header to enable search and playlist creation.</p>
-        <p class="setup-hint">Uses your signed-in YouTube account — no separate API key needed.</p>
-      </div>`;
-    return;
-  }
   container.innerHTML = `
     <div class="state-message">
       <div class="icon">🔍</div>
@@ -464,28 +624,43 @@ function renderSearchTab() {
     </div>`;
 }
 
-// Must be called synchronously from a click handler — browsers require
-// a user gesture to open the Google account picker popup.
-function triggerOAuth(onSuccess, onFail) {
-  if (!oauthClientId) { if (onFail) onFail("no_client_id"); return; }
-  if (typeof google === "undefined" || !google.accounts?.oauth2) {
-    alert("Google sign-in library not loaded. Please refresh the page and try again.");
-    if (onFail) onFail("gis_not_loaded");
-    return;
-  }
-  google.accounts.oauth2.initTokenClient({
-    client_id: oauthClientId,
+// Reusable token client. The callback fires for both popup and silent requests.
+function getOAuthClient() {
+  if (oauthClient) return oauthClient;
+  if (typeof google === "undefined" || !google.accounts?.oauth2) return null;
+  oauthClient = google.accounts.oauth2.initTokenClient({
+    client_id: YOUTUBE_OAUTH_CLIENT_ID,
     scope: "https://www.googleapis.com/auth/youtube",
     callback: (resp) => {
+      const cb = oauthClient._pending;
+      oauthClient._pending = null;
       if (resp.error) {
         oauthToken = null;
-        if (onFail) onFail(resp.error);
-        return;
+        if (cb?.fail) cb.fail(resp.error);
+      } else {
+        oauthToken = resp.access_token;
+        if (cb?.success) cb.success(resp.access_token);
       }
-      oauthToken = resp.access_token;
-      if (onSuccess) onSuccess(oauthToken);
     },
-  }).requestAccessToken();
+  });
+  return oauthClient;
+}
+
+// For visible sign-in: MUST be called synchronously from a click handler.
+function triggerOAuth(onSuccess, onFail) {
+  const client = getOAuthClient();
+  if (!client) { if (onFail) onFail("gis_not_loaded"); return; }
+  client._pending = { success: onSuccess, fail: onFail };
+  client.requestAccessToken();
+}
+
+// Silent token request — no popup, no UI. Only succeeds if user is signed in
+// to Google and has previously authorized the app.
+function trySilentAuth(onSuccess, onFail) {
+  const client = getOAuthClient();
+  if (!client) { if (onFail) onFail("gis_not_loaded"); return; }
+  client._pending = { success: onSuccess, fail: onFail };
+  client.requestAccessToken({ prompt: "none" });
 }
 
 async function fetchSearch(token, q) {
@@ -503,8 +678,8 @@ async function fetchSearch(token, q) {
       return;
     }
     renderSearchResults((data.items || []).map(item => ({
-      title: item.snippet.title,
-      artist: item.snippet.channelTitle,
+      title: decodeHtml(item.snippet.title),
+      artist: decodeHtml(item.snippet.channelTitle),
       videoId: item.id.videoId,
     })), q);
   } catch (e) {
@@ -516,7 +691,6 @@ async function fetchSearch(token, q) {
 function doSearch() {
   const q = document.getElementById("search-input").value.trim();
   if (!q) return;
-  if (!oauthClientId) { renderSearchTab(); return; }
   if (oauthToken) { fetchSearch(oauthToken, q); return; }
   triggerOAuth(
     (token) => fetchSearch(token, q),
@@ -569,7 +743,6 @@ function switchTab(tab) {
 function createPlaylist() {
   const selected = approvedSongs.filter(s => state.selectedForPlaylist.has(s.videoId));
   if (selected.length === 0) return;
-  if (!oauthClientId) { switchTab("curated"); return; }
 
   const btn = document.getElementById("btn-create-playlist");
   btn.disabled = true;
@@ -642,18 +815,6 @@ function showPlaylistToast(msg, url) {
   toast.style.display = "flex";
 }
 
-// ── OAuth setup ────────────────────────────────────────────────────────────
-function updateOAuthStatus() {
-  const el = document.getElementById("oauth-status");
-  if (oauthClientId) {
-    el.textContent = "Google linked";
-    el.className = "oauth-status set";
-    document.getElementById("oauth-client-input").value = oauthClientId.slice(0, 12) + "…";
-  } else {
-    el.className = "oauth-status missing";
-  }
-}
-
 // ── BPM dual slider ────────────────────────────────────────────────────────
 function updateBpmTrack() {
   const lo = 60, hi = 180, span = hi - lo;
@@ -722,21 +883,6 @@ function wire() {
   });
 
   document.getElementById("btn-create-playlist").addEventListener("click", createPlaylist);
-
-  // OAuth
-  document.getElementById("btn-save-oauth").addEventListener("click", () => {
-    const val = document.getElementById("oauth-client-input").value.trim();
-    oauthClientId = val;
-    oauthToken = null;
-    if (val) localStorage.setItem("wcs_oauth_client_id", val);
-    else localStorage.removeItem("wcs_oauth_client_id");
-    updateOAuthStatus();
-    renderCuratedTab();
-    renderSearchTab();
-  });
-  document.getElementById("oauth-client-input").addEventListener("keydown", e => {
-    if (e.key === "Enter") document.getElementById("btn-save-oauth").click();
-  });
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
@@ -750,10 +896,25 @@ function init() {
   });
 
   updateApprovedCount();
-  updateOAuthStatus();
   wire();
   renderCuratedTab();
   switchTab("curated");
+
+  // Try silent auth — if the user is signed in to Google and has previously
+  // authorized this app, we get a token without any UI. GIS may not be loaded
+  // yet, so retry briefly until it is.
+  let attempts = 0;
+  const trySilent = () => {
+    if (typeof google !== "undefined" && google.accounts?.oauth2) {
+      trySilentAuth(
+        () => { renderCuratedTab(); renderSearchTab(); },
+        () => { /* silent failure is expected for first-time users */ }
+      );
+    } else if (attempts++ < 20) {
+      setTimeout(trySilent, 150);
+    }
+  };
+  trySilent();
 }
 
 document.addEventListener("DOMContentLoaded", init);
