@@ -276,19 +276,11 @@ function markFiltersPending() {
   document.querySelector(".btn-refresh")?.classList.add("pending");
 }
 
-async function refreshRecommendations() {
+async function fetchRecommendations(token) {
   document.querySelector(".btn-refresh")?.classList.remove("pending");
-
-  if (!oauthClientId) {
-    renderCuratedTab();
-    return;
-  }
-
   const container = document.getElementById("tab-curated");
   container.innerHTML = `<div class="state-message"><div class="icon">🔍</div><p>Finding songs…</p></div>`;
-
   try {
-    const token = await getOAuthToken();
     const query = buildCurationQuery();
     const res = await fetch(
       `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoCategoryId=10&maxResults=12`,
@@ -307,12 +299,23 @@ async function refreshRecommendations() {
         videoId: item.id.videoId,
       }))
       .filter(s => !isDisapproved(s) && !isApproved(s));
-
     renderCuratedTab();
   } catch (e) {
     oauthToken = null;
     container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(e.message) || "Failed to load recommendations."}</p></div>`;
   }
+}
+
+function refreshRecommendations() {
+  if (oauthToken) { fetchRecommendations(oauthToken); return; }
+  triggerOAuth(
+    (token) => fetchRecommendations(token),
+    () => {
+      document.getElementById("tab-curated").innerHTML =
+        `<div class="state-message"><p class="error-msg">⚠ Sign-in failed or was cancelled. Click Refresh to try again.</p></div>`;
+      document.querySelector(".btn-refresh")?.classList.add("pending");
+    }
+  );
 }
 
 function renderCuratedTab() {
@@ -343,7 +346,13 @@ function renderCuratedTab() {
       localStorage.setItem("wcs_oauth_client_id", val);
       document.getElementById("oauth-client-input").value = val.slice(0, 12) + "…";
       updateOAuthStatus();
-      refreshRecommendations();
+      // triggerOAuth must be called synchronously inside this click handler
+      triggerOAuth(
+        (token) => fetchRecommendations(token),
+        (err) => {
+          container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ Sign-in failed: ${escHtml(String(err))}.<br>Make sure <code>${location.origin}</code> is in your OAuth Client's Authorized JavaScript origins.</p></div>`;
+        }
+      );
     });
     input.addEventListener("keydown", e => {
       if (e.key === "Enter") container.querySelector("#inline-oauth-save").click();
@@ -455,52 +464,67 @@ function renderSearchTab() {
     </div>`;
 }
 
-async function getOAuthToken() {
-  if (oauthToken) return oauthToken;
-  return new Promise((resolve, reject) => {
-    google.accounts.oauth2.initTokenClient({
-      client_id: oauthClientId,
-      scope: "https://www.googleapis.com/auth/youtube",
-      callback: (resp) => {
-        if (resp.error) { reject(new Error(resp.error)); return; }
-        oauthToken = resp.access_token;
-        resolve(oauthToken);
-      },
-    }).requestAccessToken();
-  });
+// Must be called synchronously from a click handler — browsers require
+// a user gesture to open the Google account picker popup.
+function triggerOAuth(onSuccess, onFail) {
+  if (!oauthClientId) { if (onFail) onFail("no_client_id"); return; }
+  if (typeof google === "undefined" || !google.accounts?.oauth2) {
+    alert("Google sign-in library not loaded. Please refresh the page and try again.");
+    if (onFail) onFail("gis_not_loaded");
+    return;
+  }
+  google.accounts.oauth2.initTokenClient({
+    client_id: oauthClientId,
+    scope: "https://www.googleapis.com/auth/youtube",
+    callback: (resp) => {
+      if (resp.error) {
+        oauthToken = null;
+        if (onFail) onFail(resp.error);
+        return;
+      }
+      oauthToken = resp.access_token;
+      if (onSuccess) onSuccess(oauthToken);
+    },
+  }).requestAccessToken();
 }
 
-async function doSearch() {
-  const q = document.getElementById("search-input").value.trim();
-  if (!q) return;
-
-  if (!oauthClientId) { renderSearchTab(); return; }
-
+async function fetchSearch(token, q) {
   const container = document.getElementById("tab-search");
   container.innerHTML = `<div class="state-message"><div class="icon">🔍</div><p>Searching…</p></div>`;
-
   try {
-    const token = await getOAuthToken();
     const res = await fetch(
       `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(q)}&type=video&videoCategoryId=10&maxResults=6`,
       { headers: { "Authorization": `Bearer ${token}` } }
     );
     const data = await res.json();
     if (data.error) {
-      if (data.error.code === 401) { oauthToken = null; }
+      if (data.error.code === 401) oauthToken = null;
       container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(data.error.message)}</p></div>`;
       return;
     }
-    const songs = (data.items || []).map(item => ({
+    renderSearchResults((data.items || []).map(item => ({
       title: item.snippet.title,
       artist: item.snippet.channelTitle,
       videoId: item.id.videoId,
-    }));
-    renderSearchResults(songs, q);
+    })), q);
   } catch (e) {
     oauthToken = null;
-    container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(e.message) || "Search failed. Try again."}</p></div>`;
+    container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(e.message) || "Search failed."}</p></div>`;
   }
+}
+
+function doSearch() {
+  const q = document.getElementById("search-input").value.trim();
+  if (!q) return;
+  if (!oauthClientId) { renderSearchTab(); return; }
+  if (oauthToken) { fetchSearch(oauthToken, q); return; }
+  triggerOAuth(
+    (token) => fetchSearch(token, q),
+    () => {
+      document.getElementById("tab-search").innerHTML =
+        `<div class="state-message"><p class="error-msg">⚠ Sign-in failed or was cancelled.</p></div>`;
+    }
+  );
 }
 
 function renderSearchResults(songs, query) {
@@ -542,27 +566,26 @@ function switchTab(tab) {
 }
 
 // ── YouTube Playlist creation ──────────────────────────────────────────────
-async function createPlaylist() {
+function createPlaylist() {
   const selected = approvedSongs.filter(s => state.selectedForPlaylist.has(s.videoId));
   if (selected.length === 0) return;
-
-  if (!oauthClientId) {
-    switchTab("curated");
-    return;
-  }
+  if (!oauthClientId) { switchTab("curated"); return; }
 
   const btn = document.getElementById("btn-create-playlist");
   btn.disabled = true;
   btn.textContent = "Connecting…";
 
-  try {
-    await getOAuthToken();
-  } catch (err) {
-    alert("Google sign-in failed: " + err.message);
+  const proceed = (token) => doCreatePlaylist(token, selected, btn);
+  const onFail = (err) => {
+    alert("Google sign-in failed: " + err);
     updateCreateBtn();
-    return;
-  }
+  };
 
+  if (oauthToken) { proceed(oauthToken); return; }
+  triggerOAuth(proceed, onFail);
+}
+
+async function doCreatePlaylist(token, selected, btn) {
   btn.textContent = "Creating playlist…";
 
   try {
@@ -571,7 +594,7 @@ async function createPlaylist() {
       "https://www.googleapis.com/youtube/v3/playlists?part=snippet,status",
       {
         method: "POST",
-        headers: { "Authorization": `Bearer ${oauthToken}`, "Content-Type": "application/json" },
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           snippet: {
             title: `WCS Mix — ${new Date().toLocaleDateString()}`,
@@ -590,7 +613,7 @@ async function createPlaylist() {
         "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet",
         {
           method: "POST",
-          headers: { "Authorization": `Bearer ${oauthToken}`, "Content-Type": "application/json" },
+          headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
           body: JSON.stringify({
             snippet: {
               playlistId: plRes.id,
@@ -704,9 +727,12 @@ function wire() {
   document.getElementById("btn-save-oauth").addEventListener("click", () => {
     const val = document.getElementById("oauth-client-input").value.trim();
     oauthClientId = val;
+    oauthToken = null;
     if (val) localStorage.setItem("wcs_oauth_client_id", val);
     else localStorage.removeItem("wcs_oauth_client_id");
     updateOAuthStatus();
+    renderCuratedTab();
+    renderSearchTab();
   });
   document.getElementById("oauth-client-input").addEventListener("keydown", e => {
     if (e.key === "Enter") document.getElementById("btn-save-oauth").click();
