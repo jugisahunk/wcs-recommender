@@ -272,6 +272,11 @@ main { padding: 20px 24px; }
   transition: background 0.15s;
 }
 .btn-refresh:hover { background: var(--accent-glow); }
+.btn-refresh.pending {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
 
 .section-header h2 {
   flex: 1;

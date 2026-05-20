@@ -260,11 +260,16 @@ const RECOMMENDATION_BATCH = 8;
 function getFilteredSongs() {
   return CURATED_SONGS.filter(s => {
     if (isDisapproved(s)) return false;
+    if (isApproved(s)) return false;
     if (state.genre !== "all" && s.genre !== state.genre) return false;
     if (state.energy !== "all" && s.energy !== state.energy) return false;
     if (s.bpm && (s.bpm < state.bpmMin || s.bpm > state.bpmMax)) return false;
     return true;
   });
+}
+
+function markFiltersPending() {
+  document.querySelector(".btn-refresh")?.classList.add("pending");
 }
 
 function shuffleArray(arr) {
@@ -279,6 +284,7 @@ function shuffleArray(arr) {
 function refreshRecommendations() {
   state.recommendedSongs = shuffleArray(getFilteredSongs()).slice(0, RECOMMENDATION_BATCH);
   renderCuratedTab();
+  document.querySelector(".btn-refresh")?.classList.remove("pending");
 }
 
 function renderCuratedTab() {
@@ -590,10 +596,10 @@ function wire() {
   document.querySelectorAll(".tab-btn").forEach(btn =>
     btn.addEventListener("click", () => switchTab(btn.dataset.tab)));
 
-  // Filters
+  // Filters — update state only; Refresh applies them
   document.getElementById("filter-genre").addEventListener("change", e => {
     state.genre = e.target.value;
-    refreshRecommendations();
+    markFiltersPending();
   });
 
   document.querySelectorAll(".pill[data-energy]").forEach(pill => {
@@ -602,7 +608,7 @@ function wire() {
       state.energy = state.energy === val ? "all" : val;
       document.querySelectorAll(".pill[data-energy]").forEach(p =>
         p.classList.toggle("active", p.dataset.energy === state.energy));
-      refreshRecommendations();
+      markFiltersPending();
     });
   });
 
@@ -612,13 +618,13 @@ function wire() {
     state.bpmMin = Math.min(+bpmMin.value, state.bpmMax - 5);
     bpmMin.value = state.bpmMin;
     updateBpmTrack();
-    refreshRecommendations();
+    markFiltersPending();
   });
   bpmMax.addEventListener("input", () => {
     state.bpmMax = Math.max(+bpmMax.value, state.bpmMin + 5);
     bpmMax.value = state.bpmMax;
     updateBpmTrack();
-    refreshRecommendations();
+    markFiltersPending();
   });
   updateBpmTrack();
 
