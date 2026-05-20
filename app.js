@@ -514,6 +514,80 @@ function persistYtCache() {
   localStorage.setItem("wcs_yt_cache", JSON.stringify(ytSearchCache));
 }
 
+// ── Cache pre-warming via Piped (no YouTube Data API quota) ───────────────
+// Piped is an open-source YouTube frontend. Its public API returns videoIds
+// for search queries without any auth or API key. We use it ONLY to populate
+// the YT cache — actual playback still uses YouTube's embed player.
+//
+// Call from the browser console: warmCache()
+// Optional first arg = max tracks per genre (default 30).
+const PIPED_INSTANCES = [
+  "https://pipedapi.kavin.rocks",
+  "https://api.piped.yt",
+  "https://piapi.ggtyler.dev",
+  "https://pipedapi.adminforge.de",
+  "https://pipedapi.r4fo.com",
+];
+
+async function pipedFindVideoId(artist, title) {
+  const q = `${artist} ${title}`;
+  for (const base of PIPED_INSTANCES) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch(`${base}/search?q=${encodeURIComponent(q)}&filter=music_songs`, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const first = (data.items || []).find(it => /\/watch\?v=([A-Za-z0-9_-]{11})/.test(it.url || ""));
+      if (!first) continue;
+      const m = first.url.match(/\/watch\?v=([A-Za-z0-9_-]{11})/);
+      return m ? m[1] : null;
+    } catch (_) { /* try next instance */ }
+  }
+  return null;
+}
+
+async function warmCache(perGenre = 30) {
+  const allTags = state.genre === "all"
+    ? Object.keys(LASTFM_TAG_MAP)
+    : Object.keys(LASTFM_TAG_MAP);
+  console.log(`[warmCache] Starting pre-warm across ${allTags.length} genres, ${perGenre} tracks each…`);
+
+  let total = 0, hits = 0, misses = 0, skipped = 0;
+  for (const genreId of allTags) {
+    const tag = LASTFM_TAG_MAP[genreId];
+    let candidates;
+    try {
+      candidates = await fetchLastFmTopTracks(tag, perGenre);
+    } catch (e) {
+      console.warn(`[warmCache] Last.fm failed for ${tag}:`, e.message);
+      continue;
+    }
+    console.log(`[warmCache] ${tag}: ${candidates.length} candidates from Last.fm`);
+
+    for (const c of candidates) {
+      total++;
+      const key = ytCacheKey(c.artist, c.title);
+      if (key in ytSearchCache) { skipped++; continue; }
+      const videoId = await pipedFindVideoId(c.artist, c.title);
+      ytSearchCache[key] = videoId;
+      if (videoId) hits++; else misses++;
+      // Throttle a bit so we don't hammer Piped
+      await new Promise(r => setTimeout(r, 80));
+    }
+    persistYtCache();
+    console.log(`[warmCache] ${tag} done. Running totals — hits:${hits} misses:${misses} skipped:${skipped}`);
+  }
+
+  console.log(`[warmCache] Complete. Total looked-at: ${total}, hits: ${hits}, misses: ${misses}, skipped (already cached): ${skipped}`);
+  console.log(`[warmCache] Cache size is now ${Object.keys(ytSearchCache).length} entries.`);
+  return { total, hits, misses, skipped, cacheSize: Object.keys(ytSearchCache).length };
+}
+
+// Expose globally so it's reachable from the browser console.
+window.warmCache = warmCache;
+
 // Step 3 — Find the YouTube video that matches a known track. Returns videoId or null.
 // Cached forever in localStorage to save API quota (100 units per uncached lookup).
 async function findYouTubeVideo(artist, title, token) {
@@ -540,7 +614,7 @@ async function findYouTubeVideo(artist, title, token) {
   }
 }
 
-const MAX_YT_LOOKUPS = 15;        // cap YouTube searches per refresh (quota)
+const MAX_YT_LOOKUPS = 10;        // cap YouTube searches per refresh (quota)
 const TARGET_DISPLAY  = 12;       // cards to show
 
 async function fetchRecommendations(token) {
