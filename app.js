@@ -323,9 +323,31 @@ function renderCuratedTab() {
     container.innerHTML = `
       <div class="search-setup">
         <div class="setup-icon">🎵</div>
-        <p>Enter your <strong>Google OAuth Client ID</strong> in the header to enable song recommendations.</p>
-        <p class="setup-hint">Uses your signed-in YouTube account to find WCS songs matching your filters.</p>
+        <p>Connect your <strong>YouTube account</strong> to get song recommendations.</p>
+        <div class="setup-key-row">
+          <input type="text" id="inline-oauth-input" placeholder="Google OAuth Client ID" autocomplete="off">
+          <button class="btn-save-key" id="inline-oauth-save">Connect</button>
+        </div>
+        <p class="setup-hint">
+          Need a Client ID?
+          <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a>
+          → APIs &amp; Services → Credentials → Create OAuth 2.0 Client ID (Web application).
+          Add <code>${location.origin}</code> to Authorized JavaScript origins.
+        </p>
       </div>`;
+    const input = container.querySelector("#inline-oauth-input");
+    container.querySelector("#inline-oauth-save").addEventListener("click", () => {
+      const val = input.value.trim();
+      if (!val) return;
+      oauthClientId = val;
+      localStorage.setItem("wcs_oauth_client_id", val);
+      document.getElementById("oauth-client-input").value = val.slice(0, 12) + "…";
+      updateOAuthStatus();
+      refreshRecommendations();
+    });
+    input.addEventListener("keydown", e => {
+      if (e.key === "Enter") container.querySelector("#inline-oauth-save").click();
+    });
     return;
   }
 
@@ -525,8 +547,7 @@ async function createPlaylist() {
   if (selected.length === 0) return;
 
   if (!oauthClientId) {
-    alert("Enter your Google OAuth Client ID in the header to enable playlist creation.\n\nSetup:\n1. Go to console.cloud.google.com\n2. Create a project → Enable YouTube Data API v3\n3. APIs & Services → Credentials → Create OAuth 2.0 Client ID (Web application)\n4. Add your site URL to Authorized JavaScript origins\n5. Paste the Client ID above and click Save");
-    document.getElementById("oauth-client-input").focus();
+    switchTab("curated");
     return;
   }
 
