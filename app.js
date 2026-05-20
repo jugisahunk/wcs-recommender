@@ -19,7 +19,7 @@ const state = {
   selectedForPlaylist: new Set(),
   currentSong: null,
   ytPlayer: null,
-  recommendedSongs: [],
+  recommendedSongs: null,
 };
 
 // ── YouTube IFrame API ─────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ function disapproveSong(song) {
   disapprovedIds.add(song.videoId);
   approvedSongs = approvedSongs.filter(s => s.videoId !== song.videoId);
   state.selectedForPlaylist.delete(song.videoId);
-  state.recommendedSongs = state.recommendedSongs.filter(s => s.videoId !== song.videoId);
+  if (state.recommendedSongs) state.recommendedSongs = state.recommendedSongs.filter(s => s.videoId !== song.videoId);
   persist();
   updateApprovedCount();
   renderCuratedTab();
@@ -254,61 +254,106 @@ function createSongCard(song, opts = {}) {
 }
 
 // ── Curated tab ────────────────────────────────────────────────────────────
-const RECOMMENDATION_BATCH = 8;
+// ── Curated tab — YTM search-driven ────────────────────────────────────────
+function buildCurationQuery() {
+  const energyTerms = { low: "slow mellow", medium: "", high: "upbeat energetic" };
+  const parts = ["west coast swing"];
 
-function getFilteredSongs() {
-  return CURATED_SONGS.filter(s => {
-    if (isDisapproved(s)) return false;
-    if (isApproved(s)) return false;
-    if (state.genre !== "all" && s.genre !== state.genre) return false;
-    if (state.energy !== "all" && s.energy !== state.energy) return false;
-    if (s.bpm && (s.bpm < state.bpmMin || s.bpm > state.bpmMax)) return false;
-    return true;
-  });
+  if (state.genre !== "all") {
+    const label = GENRES.find(g => g.id === state.genre)?.label || state.genre;
+    parts.push(label.replace(" / ", " "));
+  }
+
+  if (state.energy !== "all") parts.push(energyTerms[state.energy] || "");
+
+  const bpmMid = Math.round((state.bpmMin + state.bpmMax) / 2);
+  parts.push(`${bpmMid} bpm dance song`);
+
+  return parts.filter(Boolean).join(" ");
 }
 
 function markFiltersPending() {
   document.querySelector(".btn-refresh")?.classList.add("pending");
 }
 
-function shuffleArray(arr) {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
-
-function refreshRecommendations() {
-  state.recommendedSongs = shuffleArray(getFilteredSongs()).slice(0, RECOMMENDATION_BATCH);
-  renderCuratedTab();
+async function refreshRecommendations() {
   document.querySelector(".btn-refresh")?.classList.remove("pending");
+
+  if (!oauthClientId) {
+    renderCuratedTab();
+    return;
+  }
+
+  const container = document.getElementById("tab-curated");
+  container.innerHTML = `<div class="state-message"><div class="icon">🔍</div><p>Finding songs…</p></div>`;
+
+  try {
+    const token = await getOAuthToken();
+    const query = buildCurationQuery();
+    const res = await fetch(
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&videoCategoryId=10&maxResults=12`,
+      { headers: { "Authorization": `Bearer ${token}` } }
+    );
+    const data = await res.json();
+    if (data.error) {
+      if (data.error.code === 401) oauthToken = null;
+      container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(data.error.message)}</p></div>`;
+      return;
+    }
+    state.recommendedSongs = (data.items || [])
+      .map(item => ({
+        title: item.snippet.title,
+        artist: item.snippet.channelTitle,
+        videoId: item.id.videoId,
+      }))
+      .filter(s => !isDisapproved(s) && !isApproved(s));
+
+    renderCuratedTab();
+  } catch (e) {
+    oauthToken = null;
+    container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(e.message) || "Failed to load recommendations."}</p></div>`;
+  }
 }
 
 function renderCuratedTab() {
   const container = document.getElementById("tab-curated");
   container.innerHTML = "";
-  const pool = getFilteredSongs();
-  const songs = state.recommendedSongs || [];
 
+  if (!oauthClientId) {
+    container.innerHTML = `
+      <div class="search-setup">
+        <div class="setup-icon">🎵</div>
+        <p>Enter your <strong>Google OAuth Client ID</strong> in the header to enable song recommendations.</p>
+        <p class="setup-hint">Uses your signed-in YouTube account to find WCS songs matching your filters.</p>
+      </div>`;
+    return;
+  }
+
+  const songs = state.recommendedSongs;
   const header = document.createElement("div");
   header.className = "section-header";
-  const countLabel = pool.length === 0 ? "0 songs" :
-    songs.length < pool.length ? `${songs.length} of ${pool.length}` : `${songs.length} songs`;
-  header.innerHTML = `<h2>Curated WCS Songs</h2><span class="count-badge">${countLabel}</span>`;
+  header.innerHTML = `<h2>Curated WCS Songs</h2>${songs ? `<span class="count-badge">${songs.length} songs</span>` : ""}`;
   const refreshBtn = document.createElement("button");
-  refreshBtn.className = "btn-refresh";
-  refreshBtn.innerHTML = "&#8635; Refresh";
+  refreshBtn.className = "btn-refresh" + (songs === null ? " pending" : "");
+  refreshBtn.innerHTML = songs === null ? "&#8635; Get Recommendations" : "&#8635; Refresh";
   refreshBtn.addEventListener("click", refreshRecommendations);
   header.appendChild(refreshBtn);
   container.appendChild(header);
 
-  if (pool.length === 0) {
+  if (songs === null) {
     container.insertAdjacentHTML("beforeend", `
       <div class="state-message">
         <div class="icon">🎵</div>
-        <p>No songs match your filters.</p>
+        <p>Set your filters above, then click <strong>Get Recommendations</strong>.</p>
+      </div>`);
+    return;
+  }
+
+  if (songs.length === 0) {
+    container.insertAdjacentHTML("beforeend", `
+      <div class="state-message">
+        <div class="icon">🎵</div>
+        <p>No results. Try adjusting your filters and refreshing.</p>
       </div>`);
     return;
   }
@@ -660,7 +705,7 @@ function init() {
   updateApprovedCount();
   updateOAuthStatus();
   wire();
-  refreshRecommendations();
+  renderCuratedTab();
   switchTab("curated");
 }
 
