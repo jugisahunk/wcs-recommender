@@ -23,6 +23,11 @@ const ALL_GENRES_TAGS = ["motown", "soul", "blues", "funk", "neo-soul", "rnb"];
 // ── Persistence ────────────────────────────────────────────────────────────
 let approvedSongs  = JSON.parse(localStorage.getItem("wcs_approved")     || "[]");
 let disapprovedIds = new Set(JSON.parse(localStorage.getItem("wcs_disapproved") || "[]"));
+let bpmOverrides   = JSON.parse(localStorage.getItem("wcs_bpm_overrides") || "{}");
+// Cache of YouTube search results keyed by "artist|title" (lowercased).
+// Value is the videoId string, or null if no match was found.
+// Saves YouTube Data API quota — each cache hit avoids a 100-unit search call.
+let ytSearchCache  = JSON.parse(localStorage.getItem("wcs_yt_cache") || "{}");
 
 // Decode HTML entities returned by YouTube API (e.g. &#39; &amp;)
 function decodeHtml(str) {
@@ -38,7 +43,39 @@ const CURATED_BPM_BY_ID = Object.freeze(
   Object.fromEntries((typeof CURATED_SONGS !== "undefined" ? CURATED_SONGS : []).map(s => [s.videoId, s.bpm]))
 );
 function getSongBpm(song) {
-  return song.bpm ?? CURATED_BPM_BY_ID[song.videoId] ?? null;
+  return bpmOverrides[song.videoId] ?? song.bpm ?? CURATED_BPM_BY_ID[song.videoId] ?? null;
+}
+
+function setSongBpm(videoId, bpm) {
+  if (bpm) bpmOverrides[videoId] = bpm;
+  else delete bpmOverrides[videoId];
+  localStorage.setItem("wcs_bpm_overrides", JSON.stringify(bpmOverrides));
+
+  const approved = approvedSongs.find(s => s.videoId === videoId);
+  if (approved) { approved.bpm = bpm; persist(); }
+
+  // Update visible song cards (curated, search, approved)
+  document.querySelectorAll(`.song-card[data-video-id="${videoId}"] .song-meta`).forEach(meta => {
+    const existing = meta.querySelector(".bpm-tag");
+    if (bpm) {
+      if (existing) {
+        existing.textContent = `${bpm} BPM`;
+        existing.classList.remove("bpm-empty");
+        existing.removeAttribute("title");
+      } else {
+        meta.insertAdjacentHTML("afterbegin", `<span class="bpm-tag">${bpm} BPM</span>`);
+      }
+    } else if (existing) {
+      existing.textContent = "↓ tap to detect";
+      existing.classList.add("bpm-empty");
+      existing.title = "Play this song and tap the beat in the player to capture its BPM";
+    }
+  });
+
+  // Update the player bar if this is the currently playing song
+  if (state.currentSong?.videoId === videoId) {
+    document.querySelector(".p-bpm").textContent = bpm ? `${bpm} BPM` : "";
+  }
 }
 const YOUTUBE_OAUTH_CLIENT_ID = "869950477741-r543qe74sk7e1gj7m1f80iv991unbf9g.apps.googleusercontent.com";
 let oauthToken = null;
@@ -103,8 +140,71 @@ function showPlayerBar(song) {
   document.getElementById("player-bar").classList.add("visible");
   document.querySelector(".p-title").textContent  = song.title;
   document.querySelector(".p-artist").textContent = song.artist;
-  document.querySelector(".p-bpm").textContent    = song.bpm ? `${song.bpm} BPM` : "";
+  const knownBpm = getSongBpm(song);
+  document.querySelector(".p-bpm").textContent    = knownBpm ? `${knownBpm} BPM` : "";
   document.getElementById("player-ytm-btn").href  = `https://music.youtube.com/watch?v=${song.videoId}`;
+  resetTap();
+}
+
+// ── Tap-BPM detector ──────────────────────────────────────────────────────
+// Click along to the beat; we record timestamps and compute BPM from the
+// average interval between taps. After 2.5s of no taps we hold the value
+// but the next tap starts fresh.
+let tapTimestamps = [];
+const TAP_RESET_MS = 2500;
+
+function tapBeat() {
+  const now = performance.now();
+  if (tapTimestamps.length > 0 && now - tapTimestamps[tapTimestamps.length - 1] > TAP_RESET_MS) {
+    tapTimestamps = [];
+  }
+  tapTimestamps.push(now);
+
+  const pad = document.getElementById("tap-pad");
+  pad.classList.remove("pulse");
+  void pad.offsetWidth; // force reflow so the animation can restart
+  pad.classList.add("pulse");
+
+  renderTapDisplay();
+}
+
+function calcTapBpm() {
+  if (tapTimestamps.length < 2) return null;
+  const intervals = [];
+  for (let i = 1; i < tapTimestamps.length; i++) {
+    intervals.push(tapTimestamps[i] - tapTimestamps[i - 1]);
+  }
+  const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+  return Math.round(60000 / avg);
+}
+
+function renderTapDisplay() {
+  const bpm = calcTapBpm();
+  const count = tapTimestamps.length;
+  document.getElementById("tap-pad-bpm").textContent  = bpm ? `${bpm} BPM` : "— BPM";
+  document.getElementById("tap-pad-hint").textContent =
+    count === 0 ? "Tap to detect" : `${count} tap${count === 1 ? "" : "s"}`;
+  document.getElementById("btn-tap-save").disabled = !(bpm && count >= 4 && state.currentSong);
+}
+
+function resetTap() {
+  tapTimestamps = [];
+  renderTapDisplay();
+}
+
+function saveTappedBpm() {
+  if (!state.currentSong) return;
+  const bpm = calcTapBpm();
+  if (!bpm) return;
+  const existing = getSongBpm(state.currentSong);
+  if (existing && existing !== bpm) {
+    const ok = window.confirm(
+      `This song already has a BPM of ${existing}. Replace it with your tapped value of ${bpm}?`
+    );
+    if (!ok) return;
+  }
+  setSongBpm(state.currentSong.videoId, bpm);
+  resetTap();
 }
 
 function closePlayer() {
@@ -187,7 +287,9 @@ function createSongCard(song, opts = {}) {
   card.dataset.videoId = song.videoId;
 
   const effectiveBpm = getSongBpm(song);
-  const bpmHtml    = effectiveBpm ? `<span class="bpm-tag">${effectiveBpm} BPM</span>` : "";
+  const bpmHtml    = effectiveBpm
+    ? `<span class="bpm-tag">${effectiveBpm} BPM</span>`
+    : `<span class="bpm-tag bpm-empty" title="Play this song and tap the beat in the player to capture its BPM">↓ tap to detect</span>`;
   const genreHtml  = song.genre  ? `<span class="genre-tag">${GENRE_LABELS[song.genre] || song.genre}</span>` : "";
   const energyHtml = song.energy ? `<span class="energy-dot ${song.energy}"></span>` : "";
   const approvedBadge = (approved && !opts.selectable) ? `<span class="approved-badge">✓ Approved</span>` : "";
@@ -404,8 +506,20 @@ async function lookupDeezerBpm(artist, title) {
   }
 }
 
+function ytCacheKey(artist, title) {
+  return `${artist}|${title}`.toLowerCase().trim();
+}
+
+function persistYtCache() {
+  localStorage.setItem("wcs_yt_cache", JSON.stringify(ytSearchCache));
+}
+
 // Step 3 — Find the YouTube video that matches a known track. Returns videoId or null.
+// Cached forever in localStorage to save API quota (100 units per uncached lookup).
 async function findYouTubeVideo(artist, title, token) {
+  const key = ytCacheKey(artist, title);
+  if (key in ytSearchCache) return ytSearchCache[key];
+
   try {
     const q = `${artist} ${title}`;
     const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(q)}&type=video&videoCategoryId=10&maxResults=1`;
@@ -416,9 +530,12 @@ async function findYouTubeVideo(artist, title, token) {
       throw new Error(data.error.message);
     }
     const item = (data.items || []).find(it => isLikelyDanceSong(it));
-    if (!item?.id?.videoId) return null;
-    return item.id.videoId;
+    const videoId = item?.id?.videoId || null;
+    ytSearchCache[key] = videoId;
+    persistYtCache();
+    return videoId;
   } catch (_) {
+    // Don't cache errors — let the next attempt retry
     return null;
   }
 }
@@ -871,6 +988,15 @@ function wire() {
 
   // Player close
   document.getElementById("btn-close-player").addEventListener("click", closePlayer);
+
+  // Tap-BPM detector
+  document.getElementById("tap-pad").addEventListener("click", tapBeat);
+  document.getElementById("btn-tap-reset").addEventListener("click", resetTap);
+  document.getElementById("btn-tap-save").addEventListener("click", saveTappedBpm);
+  // Allow Space/Enter on the pad
+  document.getElementById("tap-pad").addEventListener("keydown", e => {
+    if (e.key === " " || e.key === "Enter") { e.preventDefault(); tapBeat(); }
+  });
 
   // Approved bar
   document.getElementById("select-all-cb").addEventListener("change", (e) => {
