@@ -137,6 +137,7 @@ async function playSong(song) {
       if (state.ytPlayer?.destroy) { try { state.ytPlayer.destroy(); } catch (_) {} state.ytPlayer = null; }
       if (ytEl) ytEl.style.display = "none";
       if (spEl) spEl.style.display = "flex";
+      updatePlayPauseBtn(false); // playing
       showPlayerBar(song);
       updatePlayingCards();
       return;
@@ -249,6 +250,7 @@ function closePlayer() {
   document.getElementById("player-bar").classList.remove("visible");
   if (spotifyPlayer) spotifyPlayer.pause().catch(() => {});
   if (state.ytPlayer?.stopVideo) state.ytPlayer.stopVideo();
+  updatePlayPauseBtn(true); // reset to ▶ for next open
   state.currentSong = null;
   updatePlayingCards();
 }
@@ -1067,6 +1069,10 @@ function initSpotifySDK() {
       updateSpotifyUI();
     });
 
+    spotifyPlayer.addListener("player_state_changed", (s) => {
+      if (s) updatePlayPauseBtn(s.paused);
+    });
+
     spotifyPlayer.connect();
   };
 
@@ -1098,6 +1104,14 @@ async function playSpotify(song) {
   } catch (_) {
     return false;
   }
+}
+
+// ── Play / Pause toggle ────────────────────────────────────────────────────
+function updatePlayPauseBtn(paused) {
+  const btn = document.getElementById("btn-player-playpause");
+  if (!btn) return;
+  btn.textContent = paused ? "▶" : "⏸";
+  btn.title       = paused ? "Play" : "Pause";
 }
 
 // ── Spotify UI ────────────────────────────────────────────────────────────
@@ -1247,6 +1261,13 @@ function wire() {
 
   // Player close
   document.getElementById("btn-close-player").addEventListener("click", closePlayer);
+
+  // Play / pause toggle
+  document.getElementById("btn-player-playpause")?.addEventListener("click", () => {
+    if (spotifyPlayer) {
+      spotifyPlayer.togglePlay(); // SDK updates player_state_changed which updates the button
+    }
+  });
 
   // Tap-BPM
   document.getElementById("tap-pad").addEventListener("click", tapBeat);

@@ -680,6 +680,24 @@ main { padding: 20px 24px; }
 }
 .btn-tap-reset:hover { background: var(--surface2); }
 
+.btn-player-playpause {
+  background: #1db954;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 38px;
+  height: 38px;
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, transform 0.1s;
+}
+.btn-player-playpause:hover  { background: #1ed760; }
+.btn-player-playpause:active { transform: scale(0.93); }
+
 .btn-player-spotify {
   background: white;
   border: 1px solid var(--border);
