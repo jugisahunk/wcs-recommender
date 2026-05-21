@@ -111,6 +111,15 @@ const state = {
 window.onYouTubeIframeAPIReady = () => {};
 
 function createYTPlayer(videoId) {
+  // Destroy the existing player cleanly before creating a new one.
+  // We always create a fresh iframe per song rather than calling loadVideoById()
+  // on an existing player — loadVideoById() re-triggers YouTube's ad logic and
+  // bypasses Premium entitlement checks that only fire on initial player creation.
+  if (state.ytPlayer?.destroy) {
+    try { state.ytPlayer.destroy(); } catch (_) {}
+  }
+  state.ytPlayer = null;
+
   const playerEl = document.getElementById("yt-player");
   playerEl.innerHTML = "";
   const div = document.createElement("div");
@@ -120,7 +129,7 @@ function createYTPlayer(videoId) {
     videoId,
     width: playerEl.offsetWidth || 280,
     height: playerEl.offsetHeight || 158,
-    playerVars: { autoplay: 1, controls: 1, modestbranding: 1, rel: 0 },
+    playerVars: { autoplay: 1, controls: 1, modestbranding: 1, rel: 0, origin: location.origin },
     events: {
       onReady: (e) => { e.target.unMute(); e.target.setVolume(100); e.target.playVideo(); },
     },
@@ -130,13 +139,7 @@ function createYTPlayer(videoId) {
 // ── Playback ───────────────────────────────────────────────────────────────
 function playSong(song) {
   state.currentSong = song;
-  if (state.ytPlayer) {
-    state.ytPlayer.loadVideoById(song.videoId);
-    state.ytPlayer.unMute();
-    state.ytPlayer.setVolume(100);
-  } else {
-    createYTPlayer(song.videoId);
-  }
+  createYTPlayer(song.videoId);
   showPlayerBar(song);
   updatePlayingCards();
 }
