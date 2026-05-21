@@ -18,7 +18,11 @@ const LASTFM_TAG_MAP = {
 };
 
 // For the "All Genres" option we pull a mix of WCS-friendly tags.
-const ALL_GENRES_TAGS = ["motown", "soul", "blues", "funk", "neo-soul", "rnb"];
+// Covers the full WCS spectrum so results aren't dominated by one sub-genre.
+const ALL_GENRES_TAGS = [
+  "motown", "soul", "rnb", "neo-soul", "funk", "blues",
+  "jazz", "pop", "country", "indie", "singer-songwriter",
+];
 
 // ── Persistence ────────────────────────────────────────────────────────────
 let approvedSongs  = JSON.parse(localStorage.getItem("wcs_approved")     || "[]");
@@ -433,8 +437,8 @@ function markFiltersPending() {
 }
 
 // Step 1 — Pull top tracks by genre tag from Last.fm.
-async function fetchLastFmTopTracks(tag, limit = 30) {
-  const url = `${LASTFM_BASE}?method=tag.gettoptracks&tag=${encodeURIComponent(tag)}&api_key=${LASTFM_API_KEY}&format=json&limit=${limit}`;
+async function fetchLastFmTopTracks(tag, limit = 30, page = 1) {
+  const url = `${LASTFM_BASE}?method=tag.gettoptracks&tag=${encodeURIComponent(tag)}&api_key=${LASTFM_API_KEY}&format=json&limit=${limit}&page=${page}`;
   const res = await fetch(url);
   const data = await res.json();
   if (data?.error) throw new Error(`Last.fm: ${data.message || "request failed"}`);
@@ -446,10 +450,12 @@ async function fetchLastFmTopTracks(tag, limit = 30) {
 
 async function fetchCandidates(genre) {
   if (genre === "all") {
-    // Combine top tracks from a mix of WCS-friendly tags.
-    const lists = await Promise.all(ALL_GENRES_TAGS.map(t =>
-      fetchLastFmTopTracks(t, 10).catch(() => [])
-    ));
+    // Pull from a random page per tag so each Refresh surfaces different tracks.
+    // Pages 1–3 gives 3× more variety than always pulling the same top hits.
+    const lists = await Promise.all(ALL_GENRES_TAGS.map(t => {
+      const page = Math.ceil(Math.random() * 3);
+      return fetchLastFmTopTracks(t, 8, page).catch(() => []);
+    }));
     // Dedupe by artist+title
     const seen = new Set();
     const merged = [];
