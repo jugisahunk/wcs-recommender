@@ -523,10 +523,13 @@ function persistYtCache() {
 // Optional first arg = max tracks per genre (default 30).
 const PIPED_INSTANCES = [
   "https://pipedapi.kavin.rocks",
-  "https://api.piped.yt",
-  "https://piapi.ggtyler.dev",
+  "https://pipedapi.leptons.xyz",
+  "https://piped-api.privacy.com.de",
+  "https://pipedapi.darkness.services",
+  "https://api.piped.private.coffee",
+  "https://pipedapi.owo.si",
+  "https://pipedapi.drgns.space",
   "https://pipedapi.adminforge.de",
-  "https://pipedapi.r4fo.com",
 ];
 
 async function pipedFindVideoId(artist, title) {
@@ -602,15 +605,23 @@ function extractPlaylistId(input) {
 
 async function fetchPipedPlaylist(playlistId) {
   for (const base of PIPED_INSTANCES) {
+    const host = base.replace("https://", "");
+    setImportStatus(`Trying ${host}…`);
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), 10000);
       const res = await fetch(`${base}/playlists/${encodeURIComponent(playlistId)}`, { signal: ctrl.signal });
       clearTimeout(timer);
-      if (!res.ok) continue;
+      if (!res.ok) {
+        setImportStatus(`${host} → HTTP ${res.status}, trying next…`);
+        continue;
+      }
       const data = await res.json();
       if (data?.relatedStreams) return data;
-    } catch (_) { /* try next instance */ }
+      setImportStatus(`${host} → unexpected response, trying next…`);
+    } catch (e) {
+      setImportStatus(`${host} → ${e.name === "AbortError" ? "timed out" : "unreachable"}, trying next…`);
+    }
   }
   return null;
 }
