@@ -1038,6 +1038,81 @@ main { padding: 20px 24px; }
 }
 .playlist-creating .spinner { width: 16px; height: 16px; border-width: 2px; margin: 0; }
 
+/* ── Song progress bar ── */
+.player-progress {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  width: 100%;
+}
+
+.p-elapsed,
+.p-duration {
+  font-size: 0.64rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 26px;
+  line-height: 1;
+}
+.p-duration { text-align: right; }
+
+#progress-slider {
+  flex: 1;
+  min-width: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);       /* overridden dynamically by JS for fill */
+  outline: none;
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+  transition: height 0.1s;
+}
+#progress-slider:hover { height: 5px; }
+
+#progress-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  background: var(--accent);
+  border-radius: 50%;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+#progress-slider:hover::-webkit-slider-thumb { transform: scale(1.2); }
+
+#progress-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+}
+#progress-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+#progress-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  background: var(--accent);
+  border-radius: 50%;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  cursor: pointer;
+}
+
+#progress-slider:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* ── Responsive ── */
 @media (max-width: 620px) {
   header { padding: 12px 16px; }

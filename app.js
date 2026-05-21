@@ -95,8 +95,10 @@ const state = {
 };
 
 // ── Spotify runtime state ──────────────────────────────────────────────────
-let spotifyDeviceId = null;
-let spotifyPlayer   = null;
+let spotifyDeviceId    = null;
+let spotifyPlayer      = null;
+let _progressInterval  = null;   // setInterval handle for progress polling
+let _isDragging        = false;  // true while user is scrubbing the slider
 
 // ── YouTube IFrame API (kept as silent fallback for legacy approved songs) ──
 window.onYouTubeIframeAPIReady = () => {};
@@ -139,6 +141,10 @@ async function playSong(song) {
       if (spEl) spEl.style.display = "flex";
       updatePlayPauseBtn(false); // playing
       showPlayerBar(song);
+      // Enable progress slider and begin polling
+      const sl = document.getElementById("progress-slider");
+      if (sl) sl.disabled = false;
+      startProgressPolling();
       updatePlayingCards();
       return;
     }
@@ -250,6 +256,8 @@ function closePlayer() {
   document.getElementById("player-bar").classList.remove("visible");
   if (spotifyPlayer) spotifyPlayer.pause().catch(() => {});
   if (state.ytPlayer?.stopVideo) state.ytPlayer.stopVideo();
+  stopProgressPolling();
+  resetProgressBar();
   updatePlayPauseBtn(true); // reset to ▶ for next open
   state.currentSong = null;
   updatePlayingCards();
@@ -1090,7 +1098,15 @@ function initSpotifySDK() {
     });
 
     spotifyPlayer.addListener("player_state_changed", (s) => {
-      if (s) updatePlayPauseBtn(s.paused);
+      if (!s) return;
+      updatePlayPauseBtn(s.paused);
+      updateProgressBar(s.position, s.duration);
+      // Pause progress polling while paused; resume it when playing
+      if (s.paused) {
+        stopProgressPolling();
+      } else if (!_progressInterval) {
+        startProgressPolling();
+      }
     });
 
     spotifyPlayer.connect();
@@ -1132,6 +1148,55 @@ function updatePlayPauseBtn(paused) {
   if (!btn) return;
   btn.textContent = paused ? "▶" : "⏸";
   btn.title       = paused ? "Play" : "Pause";
+}
+
+// ── Song progress bar ──────────────────────────────────────────────────────
+function formatMs(ms) {
+  if (!ms || ms < 0) return "0:00";
+  const total = Math.floor(ms / 1000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function updateProgressBar(posMs, durMs) {
+  const slider  = document.getElementById("progress-slider");
+  const elapsed = document.getElementById("p-elapsed");
+  const durEl   = document.getElementById("p-duration");
+  if (!slider) return;
+
+  slider.max = durMs || 0;
+  if (!_isDragging) {
+    slider.value = posMs || 0;
+    // Update gradient fill (WebKit; Firefox uses ::-moz-range-progress natively)
+    const pct = durMs > 0 ? (posMs / durMs) * 100 : 0;
+    slider.style.background =
+      `linear-gradient(to right, #6244b0 ${pct}%, #dddde8 ${pct}%)`;
+  }
+  if (elapsed) elapsed.textContent = formatMs(posMs);
+  if (durEl)   durEl.textContent   = formatMs(durMs);
+}
+
+function resetProgressBar() {
+  const slider  = document.getElementById("progress-slider");
+  const elapsed = document.getElementById("p-elapsed");
+  const durEl   = document.getElementById("p-duration");
+  if (slider)  { slider.max = 0; slider.value = 0; slider.disabled = true;
+                 slider.style.background = ""; }
+  if (elapsed) elapsed.textContent = "0:00";
+  if (durEl)   durEl.textContent   = "0:00";
+}
+
+function startProgressPolling() {
+  stopProgressPolling();
+  _progressInterval = setInterval(async () => {
+    if (_isDragging || !spotifyPlayer) return;
+    const s = await spotifyPlayer.getCurrentState();
+    if (!s) return;
+    updateProgressBar(s.position, s.duration);
+  }, 500);
+}
+
+function stopProgressPolling() {
+  if (_progressInterval) { clearInterval(_progressInterval); _progressInterval = null; }
 }
 
 // ── Spotify UI ────────────────────────────────────────────────────────────
@@ -1281,6 +1346,23 @@ function wire() {
 
   // Player close
   document.getElementById("btn-close-player").addEventListener("click", closePlayer);
+
+  // Progress slider — seek on release, update label live while dragging
+  const progressSlider = document.getElementById("progress-slider");
+  progressSlider.addEventListener("mousedown",  () => { _isDragging = true; });
+  progressSlider.addEventListener("touchstart", () => { _isDragging = true; }, { passive: true });
+  progressSlider.addEventListener("input", () => {
+    // Show where you'll land while dragging, without seeking yet
+    document.getElementById("p-elapsed").textContent = formatMs(+progressSlider.value);
+    // Keep the fill gradient in sync while dragging
+    const pct = progressSlider.max > 0 ? (+progressSlider.value / +progressSlider.max) * 100 : 0;
+    progressSlider.style.background =
+      `linear-gradient(to right, #6244b0 ${pct}%, #dddde8 ${pct}%)`;
+  });
+  progressSlider.addEventListener("change", () => {
+    if (spotifyPlayer) spotifyPlayer.seek(+progressSlider.value).catch(console.warn);
+    _isDragging = false;
+  });
 
   // Play / pause toggle — use getCurrentState for reliability instead of togglePlay()
   document.getElementById("btn-player-playpause")?.addEventListener("click", async () => {

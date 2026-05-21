@@ -107,6 +107,11 @@
     <div class="p-title">—</div>
     <div class="p-artist"></div>
     <div class="p-bpm"></div>
+    <div class="player-progress">
+      <span class="p-elapsed" id="p-elapsed">0:00</span>
+      <input type="range" id="progress-slider" min="0" max="0" value="0" step="1" disabled>
+      <span class="p-duration" id="p-duration">0:00</span>
+    </div>
   </div>
   <div class="tap-bpm">
     <button class="tap-pad" id="tap-pad" title="Click along to the beat to detect BPM">
