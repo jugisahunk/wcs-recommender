@@ -712,7 +712,7 @@ async function findYouTubeVideo(artist, title, token) {
     const res = await fetch(url, { headers: { "Authorization": `Bearer ${token}` } });
     const data = await res.json();
     if (data.error) {
-      if (data.error.code === 401) oauthToken = null;
+      if (data.error.code === 401) { oauthToken = null; _clearCachedToken(); }
       throw new Error(data.error.message);
     }
     const item = (data.items || []).find(it => isLikelyDanceSong(it));
@@ -916,15 +916,70 @@ function updateCreateBtn() {
     : "▶ Create YouTube Playlist";
 }
 
+// ── Piped search (multi-result, used by Search tab) ───────────────────────
+async function pipedSearch(q, maxResults = 6) {
+  for (const base of PIPED_INSTANCES) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch(
+        `${base}/search?q=${encodeURIComponent(q)}&filter=music_songs`,
+        { signal: ctrl.signal }
+      );
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const items = (data.items || [])
+        .filter(it => /\/watch\?v=([A-Za-z0-9_-]{11})/.test(it.url || ""))
+        .slice(0, maxResults)
+        .map(it => ({
+          title:   it.title        || "",
+          artist:  it.uploaderName || "",
+          videoId: it.url.match(/\/watch\?v=([A-Za-z0-9_-]{11})/)[1],
+        }));
+      if (items.length > 0) return items;
+    } catch (_) { continue; }
+  }
+  return null;
+}
+
 // ── Search tab ─────────────────────────────────────────────────────────────
 function renderSearchTab() {
   const container = document.getElementById("tab-search");
+  const hint = oauthToken
+    ? '<span class="signed-in-note">✓ Signed in to YouTube</span>'
+    : state.usePiped
+      ? 'Piped-first is on — no sign-in needed.'
+      : "You'll be prompted to sign in on first search.";
   container.innerHTML = `
     <div class="state-message">
       <div class="icon">🔍</div>
-      <p>Search for an artist, song, or style above.<br>
-      ${oauthToken ? '<span class="signed-in-note">✓ Signed in to YouTube</span>' : 'You\'ll be prompted to sign in on first search.'}</p>
+      <p>Search for an artist, song, or style above.<br>${hint}</p>
     </div>`;
+}
+
+// ── OAuth token session cache ──────────────────────────────────────────────
+// GIS implicit tokens expire after ~1 hour and are never stored between page
+// loads. Caching in sessionStorage means reloads within the same browser
+// session skip the sign-in prompt entirely.
+const _SESSION_TOKEN_KEY = "wcs_oauth_session";
+function _cacheToken(token) {
+  try {
+    sessionStorage.setItem(_SESSION_TOKEN_KEY, JSON.stringify(
+      { token, exp: Date.now() + 3500 * 1000 } // 3500 s ≈ 58 min
+    ));
+  } catch (_) {}
+}
+function _getCachedToken() {
+  try {
+    const raw = sessionStorage.getItem(_SESSION_TOKEN_KEY);
+    if (!raw) return null;
+    const { token, exp } = JSON.parse(raw);
+    return exp > Date.now() ? token : null;
+  } catch (_) { return null; }
+}
+function _clearCachedToken() {
+  try { sessionStorage.removeItem(_SESSION_TOKEN_KEY); } catch (_) {}
 }
 
 // Reusable token client. The callback fires for both popup and silent requests.
@@ -939,9 +994,11 @@ function getOAuthClient() {
       oauthClient._pending = null;
       if (resp.error) {
         oauthToken = null;
+        _clearCachedToken();
         if (cb?.fail) cb.fail(resp.error);
       } else {
         oauthToken = resp.access_token;
+        _cacheToken(resp.access_token);
         if (cb?.success) cb.success(resp.access_token);
       }
     },
@@ -969,6 +1026,21 @@ function trySilentAuth(onSuccess, onFail) {
 async function fetchSearch(token, q) {
   const container = document.getElementById("tab-search");
   container.innerHTML = `<div class="state-message"><div class="icon">🔍</div><p>Searching…</p></div>`;
+
+  // Try Piped first when toggle is on — no quota, no OAuth required.
+  if (state.usePiped) {
+    const results = await pipedSearch(q);
+    if (results && results.length > 0) {
+      renderSearchResults(results, q);
+      return;
+    }
+    // Piped failed — fall through to YouTube Data API if we have a token.
+    if (!token) {
+      container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ Piped search failed and you're not signed in. Sign in or turn off Piped-first to use the YouTube API.</p></div>`;
+      return;
+    }
+  }
+
   try {
     const res = await fetch(
       `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(q)}&type=video&videoCategoryId=10&maxResults=6`,
@@ -976,7 +1048,7 @@ async function fetchSearch(token, q) {
     );
     const data = await res.json();
     if (data.error) {
-      if (data.error.code === 401) oauthToken = null;
+      if (data.error.code === 401) { oauthToken = null; _clearCachedToken(); }
       container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(data.error.message)}</p></div>`;
       return;
     }
@@ -987,6 +1059,7 @@ async function fetchSearch(token, q) {
     })), q);
   } catch (e) {
     oauthToken = null;
+    _clearCachedToken();
     container.innerHTML = `<div class="state-message"><p class="error-msg">⚠ ${escHtml(e.message) || "Search failed."}</p></div>`;
   }
 }
@@ -994,7 +1067,9 @@ async function fetchSearch(token, q) {
 function doSearch() {
   const q = document.getElementById("search-input").value.trim();
   if (!q) return;
-  if (oauthToken) { fetchSearch(oauthToken, q); return; }
+  // When Piped-first is on, skip OAuth entirely — fetchSearch will try Piped
+  // and only fall back to the YouTube API if a token happens to be available.
+  if (state.usePiped || oauthToken) { fetchSearch(oauthToken, q); return; }
   triggerOAuth(
     (token) => fetchSearch(token, q),
     () => {
@@ -1227,21 +1302,30 @@ function init() {
   renderCuratedTab();
   switchTab("curated");
 
-  // Try silent auth — if the user is signed in to Google and has previously
-  // authorized this app, we get a token without any UI. GIS may not be loaded
-  // yet, so retry briefly until it is.
-  let attempts = 0;
-  const trySilent = () => {
-    if (typeof google !== "undefined" && google.accounts?.oauth2) {
-      trySilentAuth(
-        () => { renderCuratedTab(); renderSearchTab(); },
-        () => { /* silent failure is expected for first-time users */ }
-      );
-    } else if (attempts++ < 20) {
-      setTimeout(trySilent, 150);
-    }
-  };
-  trySilent();
+  // Restore token from session cache first — avoids any sign-in prompt on
+  // page reload within the same browser session.
+  const cachedToken = _getCachedToken();
+  if (cachedToken) {
+    oauthToken = cachedToken;
+    renderCuratedTab();
+    renderSearchTab();
+  } else {
+    // Try silent auth — if the user is signed in to Google and has previously
+    // authorized this app, we get a token without any UI. GIS may not be loaded
+    // yet, so retry briefly until it is.
+    let attempts = 0;
+    const trySilent = () => {
+      if (typeof google !== "undefined" && google.accounts?.oauth2) {
+        trySilentAuth(
+          () => { renderCuratedTab(); renderSearchTab(); },
+          () => { /* silent failure is expected for first-time users */ }
+        );
+      } else if (attempts++ < 20) {
+        setTimeout(trySilent, 150);
+      }
+    };
+    trySilent();
+  }
 }
 
 document.addEventListener("DOMContentLoaded", init);
