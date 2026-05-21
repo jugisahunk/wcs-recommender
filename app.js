@@ -97,7 +97,6 @@ function persist() {
 const state = {
   tab: "curated",
   genre: "all",
-  energy: "all",
   bpmMin: 85,
   bpmMax: 120,
   usePiped: JSON.parse(localStorage.getItem("wcs_use_piped") ?? "true"),
@@ -729,8 +728,10 @@ async function findYouTubeVideo(artist, title, token) {
   }
 }
 
-const MAX_YT_LOOKUPS = 10;        // cap YouTube searches per refresh (quota)
-const TARGET_DISPLAY  = 12;       // cards to show
+const TARGET_DISPLAY  = 10;       // cards to show
+// Look up more candidates than we display so disapproved/no-result songs
+// don't shrink the visible set. Extra lookups are free via Piped.
+const MAX_YT_LOOKUPS  = TARGET_DISPLAY + 5;
 
 async function fetchRecommendations(token) {
   document.querySelector(".btn-refresh")?.classList.remove("pending");
@@ -765,7 +766,10 @@ async function fetchRecommendations(token) {
     const fresh = inRange.filter(c => {
       const candidateKey = `${c.artist}|${c.title}`.toLowerCase();
       if (approvedSongs.some(s => `${s.artist}|${s.title}`.toLowerCase() === candidateKey)) return false;
-      // We can't know videoId yet for disapproved; will re-check after YT lookup
+      // Pre-filter disapproved songs when we already have a cached videoId —
+      // avoids wasting a lookup slot on a song the user has already dismissed.
+      const cachedId = ytSearchCache[ytCacheKey(c.artist, c.title)];
+      if (cachedId && disapprovedIds.has(cachedId)) return false;
       return true;
     });
 
@@ -1218,15 +1222,6 @@ function wire() {
     markFiltersPending();
   });
 
-  document.querySelectorAll(".pill[data-energy]").forEach(pill => {
-    pill.addEventListener("click", () => {
-      const val = pill.dataset.energy;
-      state.energy = state.energy === val ? "all" : val;
-      document.querySelectorAll(".pill[data-energy]").forEach(p =>
-        p.classList.toggle("active", p.dataset.energy === state.energy));
-      markFiltersPending();
-    });
-  });
 
   const pipedToggle = document.getElementById("toggle-piped");
   pipedToggle.classList.toggle("active", state.usePiped);
