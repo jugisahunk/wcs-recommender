@@ -5,7 +5,7 @@ const DEEZER_BASE    = "https://api.deezer.com";
 
 // ── Spotify config ──────────────────────────────────────────────────────────
 const SPOTIFY_CLIENT_ID    = "00ad45138ac64dfe8529b1eb0d840672";
-const SPOTIFY_REDIRECT_URI = "https://jugisahunk.github.io/wcs-recommender";
+const SPOTIFY_REDIRECT_URI = "https://jugisahunk.github.io/wcs-recommender/";
 const SPOTIFY_SCOPES       = "streaming user-read-email user-read-private user-modify-playback-state";
 
 // Map our internal genre IDs → Last.fm tag names.
