@@ -145,9 +145,23 @@ What happens behind the scenes:
   refreshes (with a confirm prompt)
 - Both are persisted in `localStorage`
 
-### Approved tab — building a YouTube playlist
+### Approved tab — importing playlists & building new ones
 
-1. Approved songs appear here with checkboxes
+**Import an existing YouTube Music playlist:**
+
+1. Paste a playlist URL (or just the ID after `list=`) into the
+   **Import from YouTube Music** field at the top of the Approved tab
+2. Click **Import**
+3. Every track from the playlist is added to your Approved list. Tracks
+   you've previously approved or disapproved are skipped
+4. Status line reports how many were added/skipped
+
+This uses **Piped** (an open-source YouTube proxy) so it consumes zero
+YouTube Data API quota.
+
+**Build a new playlist on your YouTube account:**
+
+1. Approved songs appear with checkboxes
 2. Tick **Select all** or pick individual songs
 3. Click **▶ Create YouTube Playlist** — a private playlist is created on
    your YouTube account with the selected videos

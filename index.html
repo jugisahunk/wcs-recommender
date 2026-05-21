@@ -55,12 +55,20 @@
 
 <!-- ── Approved actions bar ──────────────────────────────────────────────── -->
 <div class="approved-bar" id="approved-bar" style="display:none">
-  <label class="select-all-label">
-    <input type="checkbox" id="select-all-cb"> Select all
-  </label>
-  <button class="btn-create-playlist" id="btn-create-playlist" disabled>
-    ▶ Create YouTube Playlist
-  </button>
+  <div class="approved-bar-import">
+    <label class="approved-bar-label" for="import-playlist-input">Import from YouTube Music:</label>
+    <input id="import-playlist-input" type="text" placeholder="Paste a YouTube Music playlist URL or ID…">
+    <button class="btn-import-playlist" id="btn-import-playlist">Import</button>
+  </div>
+  <div class="approved-bar-status" id="import-status"></div>
+  <div class="approved-bar-actions">
+    <label class="select-all-label">
+      <input type="checkbox" id="select-all-cb"> Select all
+    </label>
+    <button class="btn-create-playlist" id="btn-create-playlist" disabled>
+      ▶ Create YouTube Playlist
+    </button>
+  </div>
 </div>
 
 <!-- ── Search bar (search tab) ──────────────────────────────────────────── -->

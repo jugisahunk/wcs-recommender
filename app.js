@@ -588,6 +588,90 @@ async function warmCache(perGenre = 30) {
 // Expose globally so it's reachable from the browser console.
 window.warmCache = warmCache;
 
+// ── YTM playlist import (no YouTube Data API) ─────────────────────────────
+// Accepts a YouTube/YTM playlist URL (or raw ID) and fetches its tracks via
+// Piped, dropping each into the Approved list. Zero YT Data API quota used.
+function extractPlaylistId(input) {
+  if (!input) return null;
+  const s = input.trim();
+  const m = s.match(/[?&]list=([A-Za-z0-9_-]+)/);
+  if (m) return m[1];
+  if (/^[A-Za-z0-9_-]{10,}$/.test(s)) return s;
+  return null;
+}
+
+async function fetchPipedPlaylist(playlistId) {
+  for (const base of PIPED_INSTANCES) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 10000);
+      const res = await fetch(`${base}/playlists/${encodeURIComponent(playlistId)}`, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data?.relatedStreams) return data;
+    } catch (_) { /* try next instance */ }
+  }
+  return null;
+}
+
+function setImportStatus(msg, kind) {
+  const el = document.getElementById("import-status");
+  el.textContent = msg || "";
+  el.className = "approved-bar-status" + (kind ? ` ${kind}` : "");
+}
+
+async function importYtmPlaylist() {
+  const input = document.getElementById("import-playlist-input");
+  const btn = document.getElementById("btn-import-playlist");
+
+  const playlistId = extractPlaylistId(input.value);
+  if (!playlistId) {
+    setImportStatus("Couldn't find a playlist ID in that input.", "error");
+    return;
+  }
+
+  btn.disabled = true;
+  setImportStatus("Fetching playlist via Piped…");
+
+  const data = await fetchPipedPlaylist(playlistId);
+  if (!data) {
+    setImportStatus("Couldn't fetch playlist — Piped instances may be unreachable or the playlist is private.", "error");
+    btn.disabled = false;
+    return;
+  }
+
+  const tracks = (data.relatedStreams || []).map(s => {
+    const m = (s.url || "").match(/\/watch\?v=([A-Za-z0-9_-]{11})/);
+    if (!m) return null;
+    return {
+      videoId: m[1],
+      title: s.title || "Untitled",
+      artist: s.uploaderName || "Unknown",
+    };
+  }).filter(Boolean);
+
+  let added = 0, skipped = 0, disapproved = 0;
+  for (const track of tracks) {
+    if (isDisapproved(track))    { disapproved++; continue; }
+    if (isApproved(track))       { skipped++;     continue; }
+    approvedSongs.push(track);
+    added++;
+  }
+
+  persist();
+  updateApprovedCount();
+  renderApprovedTab();
+
+  const name = data.name ? `"${data.name}"` : "the playlist";
+  const parts = [`Imported ${added} song${added === 1 ? "" : "s"} from ${name}`];
+  if (skipped)     parts.push(`${skipped} already approved`);
+  if (disapproved) parts.push(`${disapproved} skipped (disapproved)`);
+  setImportStatus(parts.join(" · "), added > 0 ? "success" : "");
+  input.value = "";
+  btn.disabled = false;
+}
+
 // Step 3 — Find the YouTube video that matches a known track. Returns videoId or null.
 // Cached forever in localStorage to save API quota (100 units per uncached lookup).
 async function findYouTubeVideo(artist, title, token) {
@@ -1083,6 +1167,12 @@ function wire() {
   });
 
   document.getElementById("btn-create-playlist").addEventListener("click", createPlaylist);
+
+  // YTM playlist import
+  document.getElementById("btn-import-playlist").addEventListener("click", importYtmPlaylist);
+  document.getElementById("import-playlist-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") importYtmPlaylist();
+  });
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
