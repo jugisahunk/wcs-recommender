@@ -442,7 +442,7 @@ main { padding: 20px 24px; }
 .btn-play:hover { background: var(--accent-light); }
 .btn-play.loading { opacity: 0.6; cursor: wait; }
 
-.btn-ytm {
+.btn-sp-link {
   background: white;
   color: var(--text-secondary);
   border: 1px solid var(--border);
@@ -458,10 +458,10 @@ main { padding: 20px 24px; }
   text-decoration: none;
   white-space: nowrap;
 }
-.btn-ytm:hover {
-  border-color: #e00;
-  color: #cc0000;
-  background: #fff5f5;
+.btn-sp-link:hover {
+  border-color: #1db954;
+  color: #1db954;
+  background: #f0fdf6;
 }
 
 .playing-indicator {
@@ -680,7 +680,7 @@ main { padding: 20px 24px; }
 }
 .btn-tap-reset:hover { background: var(--surface2); }
 
-.btn-player-ytm {
+.btn-player-spotify {
   background: white;
   border: 1px solid var(--border);
   color: var(--text-secondary);
@@ -696,7 +696,7 @@ main { padding: 20px 24px; }
   transition: all 0.18s;
   white-space: nowrap;
 }
-.btn-player-ytm:hover { border-color: #e00; color: #cc0000; background: #fff5f5; }
+.btn-player-spotify:hover { border-color: #1db954; color: #1db954; background: #f0fdf6; }
 
 .btn-close-player {
   background: none;
