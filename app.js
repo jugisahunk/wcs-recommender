@@ -96,6 +96,7 @@ const state = {
   energy: "all",
   bpmMin: 85,
   bpmMax: 120,
+  usePiped: JSON.parse(localStorage.getItem("wcs_use_piped") ?? "true"),
   selectedForPlaylist: new Set(),
   currentSong: null,
   ytPlayer: null,
@@ -689,6 +690,16 @@ async function findYouTubeVideo(artist, title, token) {
   const key = ytCacheKey(artist, title);
   if (key in ytSearchCache) return ytSearchCache[key];
 
+  if (state.usePiped) {
+    const videoId = await pipedFindVideoId(artist, title);
+    if (videoId) {
+      ytSearchCache[key] = videoId;
+      persistYtCache();
+      return videoId;
+    }
+    // Piped failed — fall through to YouTube Data API
+  }
+
   try {
     const q = `${artist} ${title}`;
     const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(q)}&type=video&videoCategoryId=10&maxResults=1`;
@@ -1131,6 +1142,15 @@ function wire() {
         p.classList.toggle("active", p.dataset.energy === state.energy));
       markFiltersPending();
     });
+  });
+
+  const pipedToggle = document.getElementById("toggle-piped");
+  pipedToggle.classList.toggle("active", state.usePiped);
+  pipedToggle.addEventListener("click", () => {
+    state.usePiped = !state.usePiped;
+    pipedToggle.classList.toggle("active", state.usePiped);
+    localStorage.setItem("wcs_use_piped", JSON.stringify(state.usePiped));
+    markFiltersPending();
   });
 
   const bpmMin = document.getElementById("bpm-min");
