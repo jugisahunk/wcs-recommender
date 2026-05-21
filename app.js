@@ -6,7 +6,7 @@ const DEEZER_BASE    = "https://api.deezer.com";
 // ── Spotify config ──────────────────────────────────────────────────────────
 const SPOTIFY_CLIENT_ID    = "00ad45138ac64dfe8529b1eb0d840672";
 const SPOTIFY_REDIRECT_URI = "https://jugisahunk.github.io/wcs-recommender/";
-const SPOTIFY_SCOPES       = "streaming user-read-email user-read-private user-modify-playback-state";
+const SPOTIFY_SCOPES       = "streaming user-read-email user-read-private user-modify-playback-state playlist-modify-private playlist-modify-public playlist-read-private";
 
 // Map our internal genre IDs → Last.fm tag names.
 const LASTFM_TAG_MAP = {
@@ -827,7 +827,27 @@ async function createSpotifyPlaylist() {
         public:      false,
       }),
     }).then(r => r.json());
-    if (!pl.id) throw new Error(pl.error?.message || "Playlist creation failed");
+    if (!pl.id) {
+      if (pl.error?.status === 403) {
+        // Insufficient scope — token was issued before playlist scopes were added.
+        // Clear stored tokens so the user can re-authorize with the full scope set.
+        if (confirm(
+          "Spotify says "Insufficient client scope" — your saved login doesn't include " +
+          "the permissions needed to create playlists.\n\n" +
+          "Click OK to reconnect Spotify with the required permissions."
+        )) {
+          localStorage.removeItem("wcs_spotify_token");
+          localStorage.removeItem("wcs_spotify_refresh");
+          localStorage.removeItem("wcs_spotify_token_exp");
+          updateCreateBtn();
+          connectSpotify();
+          return;
+        }
+        updateCreateBtn();
+        return;
+      }
+      throw new Error(pl.error?.message || "Playlist creation failed");
+    }
 
     // Resolve Spotify URIs for each selected song
     btn.textContent = "Adding tracks…";
@@ -1262,11 +1282,17 @@ function wire() {
   // Player close
   document.getElementById("btn-close-player").addEventListener("click", closePlayer);
 
-  // Play / pause toggle
-  document.getElementById("btn-player-playpause")?.addEventListener("click", () => {
-    if (spotifyPlayer) {
-      spotifyPlayer.togglePlay(); // SDK updates player_state_changed which updates the button
+  // Play / pause toggle — use getCurrentState for reliability instead of togglePlay()
+  document.getElementById("btn-player-playpause")?.addEventListener("click", async () => {
+    if (!spotifyPlayer) return;
+    const s = await spotifyPlayer.getCurrentState();
+    if (!s) return; // nothing loaded in the player yet
+    if (s.paused) {
+      spotifyPlayer.resume().catch(console.warn);
+    } else {
+      spotifyPlayer.pause().catch(console.warn);
     }
+    // Don't manually update the button here — player_state_changed will fire
   });
 
   // Tap-BPM
