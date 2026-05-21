@@ -711,6 +711,98 @@ main { padding: 20px 24px; }
 }
 .btn-close-player:hover { background: var(--surface2); color: var(--text); }
 
+/* ── Spotify connect button ── */
+.btn-connect-spotify {
+  background: #1db954;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 8px 18px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.btn-connect-spotify:hover:not(.connected):not(.connecting) { background: #1ed760; }
+.btn-connect-spotify.connected {
+  background: var(--green);
+  cursor: pointer; /* still clickable to disconnect */
+}
+.btn-connect-spotify.connecting {
+  background: #888;
+  cursor: default;
+}
+
+/* ── Spotify now-playing panel (replaces YT iframe while Spotify plays) ── */
+#spotify-now-playing {
+  width: 280px;
+  height: 158px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: 1px solid #1db954;
+  background: linear-gradient(135deg, #0d3320 0%, #155c2a 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+}
+
+.spotify-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 36px;
+}
+.spotify-bars span {
+  display: block;
+  width: 6px;
+  border-radius: 3px;
+  background: #1db954;
+  transform-origin: bottom;
+  animation: sp-bar 0.9s ease-in-out infinite alternate;
+}
+.spotify-bars span:nth-child(1) { height: 14px; animation-delay: 0s;    animation-duration: 0.8s; }
+.spotify-bars span:nth-child(2) { height: 30px; animation-delay: 0.15s; animation-duration: 1.0s; }
+.spotify-bars span:nth-child(3) { height: 20px; animation-delay: 0.3s;  animation-duration: 0.75s; }
+.spotify-bars span:nth-child(4) { height: 36px; animation-delay: 0.45s; animation-duration: 0.95s; }
+
+@keyframes sp-bar {
+  from { transform: scaleY(0.25); }
+  to   { transform: scaleY(1); }
+}
+
+.spotify-np-text { display: flex; flex-direction: column; gap: 3px; }
+.snp-top { font-size: 0.85rem; font-weight: 700; color: #1db954; }
+.snp-bot { font-size: 0.72rem; color: rgba(255,255,255,0.55); }
+
+/* ── Player source toggle (YouTube / Spotify) ── */
+.player-source-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.source-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  padding: 5px 11px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.source-btn:hover { border-color: var(--accent-light); color: var(--accent); }
+.source-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
 /* ── OAuth / header right ── */
 .header-right { display: flex; align-items: center; }
 .oauth-area { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
