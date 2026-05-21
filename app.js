@@ -832,7 +832,7 @@ async function createSpotifyPlaylist() {
         // Insufficient scope — token was issued before playlist scopes were added.
         // Clear stored tokens so the user can re-authorize with the full scope set.
         if (confirm(
-          "Spotify says "Insufficient client scope" — your saved login doesn't include " +
+          "Spotify says \"Insufficient client scope\" — your saved login doesn't have " +
           "the permissions needed to create playlists.\n\n" +
           "Click OK to reconnect Spotify with the required permissions."
         )) {
