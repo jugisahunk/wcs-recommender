@@ -8,6 +8,14 @@ const SPOTIFY_CLIENT_ID    = "00ad45138ac64dfe8529b1eb0d840672";
 const SPOTIFY_REDIRECT_URI = "https://jugisahunk.github.io/wcs-recommender/";
 const SPOTIFY_SCOPES       = "streaming user-read-email user-read-private user-modify-playback-state playlist-modify-private playlist-modify-public playlist-read-private";
 
+// ── Firebase / Firestore config ─────────────────────────────────────────────
+// After creating your Firebase project at console.firebase.google.com:
+//   1. Create a Firestore database (Native mode)
+//   2. Copy the Project ID from Project Settings → General
+//   3. Copy the Web API Key from Project Settings → General
+const FIREBASE_PROJECT_ID = "wcs-recommender-d8da6";
+const FIREBASE_API_KEY    = "AIzaSyAU7sxC0FDehTLyiqBLxkXfFwD1fgM04vk";
+
 // Map our internal genre IDs → Last.fm tag names.
 const LASTFM_TAG_MAP = {
   motown:       "motown",
@@ -34,6 +42,7 @@ let disapprovedIds = new Set(JSON.parse(localStorage.getItem("wcs_disapproved") 
 let bpmOverrides   = JSON.parse(localStorage.getItem("wcs_bpm_overrides") || "{}");
 // Spotify track-URI cache keyed by "artist|title" (lowercased).
 let spotifyCache   = JSON.parse(localStorage.getItem("wcs_spotify_cache") || "{}");
+let spotifyUserId  = localStorage.getItem("wcs_spotify_user_id") || null;
 
 function persistSpotifyCache() {
   localStorage.setItem("wcs_spotify_cache", JSON.stringify(spotifyCache));
@@ -42,6 +51,7 @@ function persistSpotifyCache() {
 function persist() {
   localStorage.setItem("wcs_approved",    JSON.stringify(approvedSongs));
   localStorage.setItem("wcs_disapproved", JSON.stringify([...disapprovedIds]));
+  if (spotifyUserId) saveToFirestore().catch(console.warn);
 }
 
 // Look up a known BPM for a videoId from our curated reference list.
@@ -59,6 +69,7 @@ function setSongBpm(videoId, bpm) {
 
   const approved = approvedSongs.find(s => s.videoId === videoId);
   if (approved) { approved.bpm = bpm; persist(); }
+  else if (spotifyUserId) saveToFirestore().catch(console.warn);
 
   document.querySelectorAll(`.song-card[data-video-id="${videoId}"] .song-meta`).forEach(meta => {
     const existing = meta.querySelector(".bpm-tag");
@@ -80,6 +91,75 @@ function setSongBpm(videoId, bpm) {
   if (state.currentSong?.videoId === videoId) {
     document.querySelector(".p-bpm").textContent = bpm ? `${bpm} BPM` : "";
   }
+}
+
+// ── Firestore sync ─────────────────────────────────────────────────────────
+function _firestoreReady() {
+  return spotifyUserId && FIREBASE_PROJECT_ID !== "YOUR_PROJECT_ID";
+}
+
+function _firestoreDocUrl() {
+  return `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/users/${encodeURIComponent(spotifyUserId)}?key=${FIREBASE_API_KEY}`;
+}
+
+async function loadFromFirestore() {
+  const res = await fetch(_firestoreDocUrl());
+  if (res.status === 404) return;
+  if (!res.ok) throw new Error(`Firestore load failed: ${res.status}`);
+  const doc = await res.json();
+  const raw = doc.fields?.payload?.stringValue;
+  if (!raw) return;
+  const remote = JSON.parse(raw);
+
+  // Approved: union by videoId (remote fields win on conflict)
+  const byId = Object.fromEntries(approvedSongs.map(s => [s.videoId, s]));
+  for (const s of (remote.approved || [])) byId[s.videoId] = { ...byId[s.videoId], ...s };
+  approvedSongs = Object.values(byId);
+
+  // Disapproved: set union
+  for (const id of (remote.disapproved || [])) disapprovedIds.add(id);
+
+  // BPM overrides: remote wins, local fills new keys
+  bpmOverrides = { ...bpmOverrides, ...(remote.bpmOverrides || {}) };
+
+  localStorage.setItem("wcs_approved",      JSON.stringify(approvedSongs));
+  localStorage.setItem("wcs_disapproved",   JSON.stringify([...disapprovedIds]));
+  localStorage.setItem("wcs_bpm_overrides", JSON.stringify(bpmOverrides));
+}
+
+async function saveToFirestore() {
+  if (!_firestoreReady()) return;
+  const payload = JSON.stringify({
+    approved:     approvedSongs,
+    disapproved:  [...disapprovedIds],
+    bpmOverrides,
+  });
+  const url = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/users/${encodeURIComponent(spotifyUserId)}?key=${FIREBASE_API_KEY}&updateMask.fieldPaths=payload`;
+  await fetch(url, {
+    method:  "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ fields: { payload: { stringValue: payload } } }),
+  });
+}
+
+async function initFirestoreSync() {
+  if (!_firestoreReady()) {
+    // User ID not cached yet — fetch it now
+    const token = await getSpotifyToken();
+    if (!token) return;
+    try {
+      const me = await fetch("https://api.spotify.com/v1/me", {
+        headers: { "Authorization": `Bearer ${token}` },
+      }).then(r => r.json());
+      if (!me.id) return;
+      spotifyUserId = me.id;
+      localStorage.setItem("wcs_spotify_user_id", me.id);
+    } catch (_) { return; }
+  }
+  if (!_firestoreReady()) return;
+  await loadFromFirestore();
+  updateApprovedCount();
+  if (state.tab === "approved") renderApprovedTab();
 }
 
 // ── State ──────────────────────────────────────────────────────────────────
@@ -1017,6 +1097,16 @@ async function handleSpotifyCallback(code) {
     localStorage.setItem("wcs_spotify_token",     data.access_token);
     localStorage.setItem("wcs_spotify_refresh",   data.refresh_token || "");
     localStorage.setItem("wcs_spotify_token_exp", String(Date.now() + (data.expires_in - 60) * 1000));
+    // Cache user ID for Firestore sync
+    try {
+      const me = await fetch("https://api.spotify.com/v1/me", {
+        headers: { "Authorization": `Bearer ${data.access_token}` },
+      }).then(r => r.json());
+      if (me.id) {
+        spotifyUserId = me.id;
+        localStorage.setItem("wcs_spotify_user_id", me.id);
+      }
+    } catch (_) {}
     return data.access_token;
   }
   return null;
@@ -1410,6 +1500,8 @@ function wire() {
         localStorage.removeItem("wcs_spotify_token");
         localStorage.removeItem("wcs_spotify_refresh");
         localStorage.removeItem("wcs_spotify_token_exp");
+        localStorage.removeItem("wcs_spotify_user_id");
+        spotifyUserId = null;
         if (spotifyPlayer) { spotifyPlayer.disconnect(); spotifyPlayer = null; }
         _spotifySDKLoaded = false;
         spotifyDeviceId   = null;
@@ -1447,12 +1539,18 @@ function init() {
     history.replaceState({}, "", location.pathname);
   } else if (_spCode && sessionStorage.getItem("spotify_cv")) {
     history.replaceState({}, "", location.pathname);
-    handleSpotifyCallback(_spCode).then(token => {
-      if (token) initSpotifySDK();
+    handleSpotifyCallback(_spCode).then(async token => {
+      if (token) {
+        initSpotifySDK();
+        await initFirestoreSync().catch(console.warn);
+        updateApprovedCount();
+        if (state.tab === "approved") renderApprovedTab();
+      }
       updateSpotifyUI();
     });
   } else if (isSpotifyConnected()) {
     initSpotifySDK();
+    initFirestoreSync().catch(console.warn);
   }
 
   updateSpotifyUI();
